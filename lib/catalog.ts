@@ -1,8 +1,8 @@
 export type ProductCategory = string;
 
 export const officialLogoPath = "/images/wplay-logo-official.png";
-export const productsStorageKey = "wplay-products-v5";
-export const settingsStorageKey = "wplay-settings-v5";
+export const productsStorageKey = "wplay-products-v6";
+export const settingsStorageKey = "wplay-settings-v6";
 export const adminSessionStorageKey = "wplay-admin-auth-v1";
 
 export type Product = {
@@ -80,11 +80,11 @@ export const studioGallery: StudioPhoto[] = [
 export const defaultHeroSlides: HeroSlideConfig[] = [
   {
     id: "iphone-pro",
-    title: "iPhones & Titânio",
+    title: "iPhones 13 ao 18 Pro Max",
     tag: "Celulares",
     category: "Celulares",
     image: "/images/wplay-iphone.jpg",
-    specs: ["128 GB · 256 GB", "Lacrados & Seminovos", "Cotação no WhatsApp"],
+    specs: ["Linha 13 ao 18 Pro Max", "128 GB a 2 TB", "Giro 3D Interativo"],
   },
   {
     id: "scooter-eletrica",
@@ -121,7 +121,14 @@ export const defaultHeroSlides: HeroSlideConfig[] = [
 ];
 
 export const defaultVariantsByCategory: Record<string, string[]> = {
-  Celulares: ["128 GB", "256 GB", "Titânio / Preto", "Lacrado ou Seminovo"],
+  Celulares: [
+    "iPhone 13 · 128 GB",
+    "iPhone 14 Pro Max · 256 GB",
+    "iPhone 15 Pro Max · 256 GB",
+    "iPhone 16 Pro Max · 256 GB",
+    "iPhone 17 Pro Max · 512 GB",
+    "iPhone 18 Pro Max · 1 TB",
+  ],
   Mobilidade: ["Urbana", "Pneu Fat", "Duplo Assento", "Consultar Cores"],
   Perfumes: ["Masculino", "Feminino", "Árabe / Importado", "100 ml"],
   Áudio: ["Portátil", "Grave Turbo", "À prova d'água", "Party Box"],
@@ -137,8 +144,9 @@ export const initialProducts: Product[] = [
     id: "iphone-pro",
     name: "iPhones & Smartphones",
     category: "Celulares",
-    description: "Escolha capacidade ou acabamento e chame no WhatsApp.",
-    badge: "Lacrado · Seminovo",
+    description:
+      "Escolha o modelo do iPhone 13 ao 18 Pro Max, memória compatível e acabamento, ou gire em 360° no estúdio interativo.",
+    badge: "Do 13 ao 18 Pro Max · Giro 3D",
     price: null,
     image: "/images/wplay-iphone.jpg",
     imageFit: "cover",
@@ -146,7 +154,14 @@ export const initialProducts: Product[] = [
     imageScale: 1,
     published: true,
     featured: true,
-    variants: ["128 GB", "256 GB", "Titânio Natural", "Preto"],
+    variants: [
+      "iPhone 13 · 128 GB",
+      "iPhone 14 Pro Max · 256 GB",
+      "iPhone 15 Pro Max · 256 GB",
+      "iPhone 16 Pro Max · 256 GB",
+      "iPhone 17 Pro Max · 512 GB",
+      "iPhone 18 Pro Max · 1 TB",
+    ],
   },
   {
     id: "scooter-eletrica",

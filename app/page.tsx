@@ -21,6 +21,7 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  RotateCw,
   Search,
   Send,
   ShoppingBag,
@@ -51,6 +52,15 @@ import {
   settingsStorageKey,
   StoreSettings,
 } from "@/lib/catalog";
+import {
+  formatIphoneSelectionSummary,
+  getIphoneModelById,
+  IphoneFinish,
+  iphoneGenerations,
+  iphoneLineup,
+  IphoneModelSpec,
+} from "@/lib/iphone-models";
+import { Iphone3DStudio } from "@/app/components/Iphone3DStudio";
 import { createClient } from "@/lib/supabase";
 
 type FulfillmentMode = "Retirar na loja (Ipaussu)" | "Receber por entrega";
@@ -74,6 +84,16 @@ const stageAtmosphereMeta: Record<
   encomenda: { label: "Encomendas", href: "#encomenda" },
   localizacao: { label: "Localização", href: "#localizacao" },
 };
+
+function isIphoneOrCellularProduct(p: Product | null | undefined): boolean {
+  if (!p) return false;
+  const hay = `${p.id} ${p.name} ${p.category}`.toLocaleLowerCase("pt-BR");
+  return (
+    hay.includes("iphone") ||
+    hay.includes("celul") ||
+    hay.includes("smartphone")
+  );
+}
 
 function CategoryIcon({ name }: { name: string }) {
   const lower = name.toLocaleLowerCase("pt-BR");
@@ -133,9 +153,46 @@ export default function Home() {
   const [stagePaused, setStagePaused] = useState(false);
   const stageRef = useRef<HTMLDivElement | null>(null);
 
+  // Interactive iPhone 13 -> 18 Pro Max Configurator State
+  const [activeIphoneGen, setActiveIphoneGen] = useState<13 | 14 | 15 | 16 | 17 | 18>(16);
+  const [selectedIphoneModelId, setSelectedIphoneModelId] = useState<string>("iphone-16-pro-max");
+  const [selectedIphoneStorage, setSelectedIphoneStorage] = useState<string>("256 GB");
+  const [selectedIphoneFinishId, setSelectedIphoneFinishId] = useState<string>("desert-titanium");
+  const [selectedIphoneCondition, setSelectedIphoneCondition] = useState<"Lacrado" | "Seminovo">("Lacrado");
+
+  const activeIphoneModel: IphoneModelSpec = useMemo(
+    () => getIphoneModelById(selectedIphoneModelId),
+    [selectedIphoneModelId]
+  );
+
+  const activeIphoneStorage = useMemo(() => {
+    if (activeIphoneModel.storages.includes(selectedIphoneStorage)) {
+      return selectedIphoneStorage;
+    }
+    return activeIphoneModel.storages[0];
+  }, [activeIphoneModel, selectedIphoneStorage]);
+
+  const activeIphoneFinish: IphoneFinish = useMemo(() => {
+    return (
+      activeIphoneModel.finishes.find((f) => f.id === selectedIphoneFinishId) ||
+      activeIphoneModel.finishes[0]
+    );
+  }, [activeIphoneModel, selectedIphoneFinishId]);
+
+  const activeIphoneSummary = useMemo(
+    () =>
+      formatIphoneSelectionSummary(
+        activeIphoneModel,
+        activeIphoneStorage,
+        activeIphoneFinish,
+        selectedIphoneCondition
+      ),
+    [activeIphoneModel, activeIphoneStorage, activeIphoneFinish, selectedIphoneCondition]
+  );
+
   // Interactive Product Variants & Quick-Look Drawer
   const [chosenVariants, setChosenVariants] = useState<Record<string, string>>({
-    "iphone-pro": "256 GB",
+    "iphone-pro": "iPhone 16 Pro Max · 256 GB · Titânio-deserto (Lacrado)",
     "scooter-eletrica": "Pneu Fat",
     "perfumes-importados": "Árabe",
   });
@@ -160,6 +217,44 @@ export default function Home() {
   const [customMessageOverride, setCustomMessageOverride] = useState<string | null>(null);
   const [showMessageEditor, setShowMessageEditor] = useState(false);
   const [copiedFeedback, setCopiedFeedback] = useState(false);
+
+  // Sync iPhone configurator summary to the Celulares product variant
+  const applyIphoneConfiguration = (
+    nextModel: IphoneModelSpec,
+    nextStorage?: string,
+    nextFinish?: IphoneFinish,
+    nextCondition: "Lacrado" | "Seminovo" = selectedIphoneCondition
+  ) => {
+    const validStorage =
+      nextStorage && nextModel.storages.includes(nextStorage)
+        ? nextStorage
+        : nextModel.storages.includes(selectedIphoneStorage)
+        ? selectedIphoneStorage
+        : nextModel.storages[0];
+    const validFinish =
+      nextFinish && nextModel.finishes.some((f) => f.id === nextFinish.id)
+        ? nextFinish
+        : nextModel.finishes.find((f) => f.id === selectedIphoneFinishId) ||
+          nextModel.finishes[0];
+
+    setActiveIphoneGen(nextModel.generation);
+    setSelectedIphoneModelId(nextModel.id);
+    setSelectedIphoneStorage(validStorage);
+    setSelectedIphoneFinishId(validFinish.id);
+    setSelectedIphoneCondition(nextCondition);
+    setCustomMessageOverride(null);
+
+    const summary = formatIphoneSelectionSummary(
+      nextModel,
+      validStorage,
+      validFinish,
+      nextCondition
+    );
+    setChosenVariants((prev) => ({
+      ...prev,
+      "iphone-pro": summary,
+    }));
+  };
 
   // Load saved products & settings + listen for changes from /admin
   useEffect(() => {
@@ -361,8 +456,11 @@ export default function Home() {
       if (category !== "Tudo" && p.category !== category) return false;
       if (onlyFeatured && !p.featured) return false;
       if (!normalizedQuery) return true;
+      const extraIphoneSearch = isIphoneOrCellularProduct(p)
+        ? iphoneLineup.map((m) => `${m.name} ${m.storages.join(" ")}`).join(" ")
+        : "";
       const haystack =
-        `${p.name} ${p.category} ${p.description} ${p.badge} ${(p.variants || []).join(" ")}`.toLocaleLowerCase(
+        `${p.name} ${p.category} ${p.description} ${p.badge} ${(p.variants || []).join(" ")} ${extraIphoneSearch}`.toLocaleLowerCase(
           "pt-BR"
         );
       return haystack.includes(normalizedQuery);
@@ -380,12 +478,13 @@ export default function Home() {
       .map((p) => ({
         product: p,
         quantity: orderQuantities[p.id] || 1,
-        variant:
-          chosenVariants[p.id] ||
-          (p.variants && p.variants[0]) ||
-          getDefaultVariantsForCategory(p.category)[0],
+        variant: isIphoneOrCellularProduct(p)
+          ? chosenVariants[p.id] || activeIphoneSummary
+          : chosenVariants[p.id] ||
+            (p.variants && p.variants[0]) ||
+            getDefaultVariantsForCategory(p.category)[0],
       }));
-  }, [publishedProducts, orderQuantities, chosenVariants]);
+  }, [publishedProducts, orderQuantities, chosenVariants, activeIphoneSummary]);
 
   const totalOrderCount = useMemo(() => {
     const catCount = selectedCatalogEntries.reduce((acc, item) => acc + item.quantity, 0);
@@ -534,10 +633,11 @@ export default function Home() {
   };
 
   const handleQuickProductConsult = async (product: Product) => {
-    const variant =
-      chosenVariants[product.id] ||
-      (product.variants && product.variants[0]) ||
-      getDefaultVariantsForCategory(product.category)[0];
+    const variant = isIphoneOrCellularProduct(product)
+      ? chosenVariants[product.id] || activeIphoneSummary
+      : chosenVariants[product.id] ||
+        (product.variants && product.variants[0]) ||
+        getDefaultVariantsForCategory(product.category)[0];
     const priceLabel = formatCurrencyBRL(product.price);
     const meta = [variant, priceLabel].filter(Boolean).join(" · ");
     const quickText = `Olá, WPlay! Quero consultar: ${product.name}${
@@ -547,7 +647,7 @@ export default function Home() {
     if (!usesDirectText) {
       const copied = await handleCopyMessage(quickText);
       if (copied) {
-        setNotice(`"${product.name}" copiado! Cole no WhatsApp.`);
+        setNotice(`"${meta || product.name}" copiado! Cole no WhatsApp.`);
       }
     }
     window.open(href, "_blank", "noopener,noreferrer");
@@ -557,6 +657,11 @@ export default function Home() {
   const mapsHref = settings.maps_url || defaultStoreSettings.maps_url;
   const mapsEmbedUrl = buildGoogleMapsEmbedUrl(settings);
   const activeLogoUrl = settings.logo_url || officialLogoPath;
+
+  const currentGenerationModels = useMemo(
+    () => iphoneLineup.filter((m) => m.generation === activeIphoneGen),
+    [activeIphoneGen]
+  );
 
   return (
     <main id="inicio" data-stage={atmosphereStage}>
@@ -836,7 +941,7 @@ export default function Home() {
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Buscar modelo..."
+                placeholder="Buscar iPhone 13 ao 18 Pro Max, scooter..."
                 aria-label="Buscar produtos"
               />
               {query && (
@@ -852,16 +957,164 @@ export default function Home() {
           </div>
         </div>
 
+        {/* Dedicated iPhone 13 -> 18 Pro Max Interactive Selector Banner when viewing Celulares or Tudo */}
+        {(category === "Celulares" || category === "Tudo") && !onlyFeatured && !query && (
+          <div className="iphone-lineup-showcase">
+            <div className="iphone-lineup-header">
+              <div>
+                <span className="iphone-lineup-kicker">
+                  <Smartphone size={14} /> LINHA COMPLETA APPLE · DO 13 AO 18 PRO MAX
+                </span>
+                <h3>
+                  Escolha o modelo, a <span>memória compatível</span> e gire em 3D
+                </h3>
+              </div>
+
+              <button
+                type="button"
+                className="button button-lime"
+                onClick={() => {
+                  const iphoneProd =
+                    publishedProducts.find((p) => isIphoneOrCellularProduct(p)) ||
+                    publishedProducts[0];
+                  if (iphoneProd) setInspectedProduct(iphoneProd);
+                }}
+              >
+                <RotateCw size={15} /> Abrir Estúdio 3D (Espiar Todos)
+              </button>
+            </div>
+
+            {/* Generation Tabs: 13 | 14 | 15 | 16 | 17 | 18 */}
+            <div className="iphone-gen-tabs" role="tablist" aria-label="Gerações de iPhone">
+              {iphoneGenerations.map((gen) => (
+                <button
+                  key={gen}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeIphoneGen === gen}
+                  className={
+                    activeIphoneGen === gen ? "iphone-gen-tab active" : "iphone-gen-tab"
+                  }
+                  onClick={() => {
+                    setActiveIphoneGen(gen);
+                    const firstInGen =
+                      iphoneLineup.find(
+                        (m) => m.generation === gen && m.tier === "promax"
+                      ) || iphoneLineup.find((m) => m.generation === gen);
+                    if (firstInGen) {
+                      applyIphoneConfiguration(firstInGen);
+                    }
+                  }}
+                >
+                  <span>Linha</span>
+                  <strong>iPhone {gen}</strong>
+                </button>
+              ))}
+            </div>
+
+            {/* Models within selected Generation + Compatible Storages & Finishes */}
+            <div className="iphone-config-bar">
+              <div className="iphone-config-col">
+                <span className="config-col-label">
+                  1. Modelo da Linha iPhone {activeIphoneGen}
+                </span>
+                <div className="iphone-model-pills">
+                  {currentGenerationModels.map((m) => {
+                    const active = m.id === activeIphoneModel.id;
+                    return (
+                      <button
+                        key={m.id}
+                        type="button"
+                        className={active ? "iphone-model-pill active" : "iphone-model-pill"}
+                        onClick={() => applyIphoneConfiguration(m)}
+                      >
+                        <strong>{m.name}</strong>
+                        <small>{m.displaySize}</small>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="iphone-config-col">
+                <span className="config-col-label">
+                  2. Memória Compatível ({activeIphoneModel.name})
+                </span>
+                <div className="iphone-storage-pills">
+                  {activeIphoneModel.storages.map((cap) => {
+                    const active = cap === activeIphoneStorage;
+                    return (
+                      <button
+                        key={cap}
+                        type="button"
+                        className={
+                          active ? "iphone-storage-pill active" : "iphone-storage-pill"
+                        }
+                        onClick={() =>
+                          applyIphoneConfiguration(
+                            activeIphoneModel,
+                            cap,
+                            activeIphoneFinish
+                          )
+                        }
+                      >
+                        {cap}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="iphone-config-col">
+                <span className="config-col-label">
+                  3. Acabamento ({activeIphoneFinish.name})
+                </span>
+                <div className="iphone-finish-pills">
+                  {activeIphoneModel.finishes.map((fin) => {
+                    const active = fin.id === activeIphoneFinish.id;
+                    return (
+                      <button
+                        key={fin.id}
+                        type="button"
+                        className={
+                          active ? "iphone-finish-chip active" : "iphone-finish-chip"
+                        }
+                        onClick={() =>
+                          applyIphoneConfiguration(
+                            activeIphoneModel,
+                            activeIphoneStorage,
+                            fin
+                          )
+                        }
+                        title={fin.name}
+                      >
+                        <span
+                          className="finish-swatch-dot"
+                          style={{ background: fin.bodyHex }}
+                        />
+                        <span>{fin.name}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {visibleProducts.length ? (
           <div className="bento-grid">
             {visibleProducts.map((product, index) => {
               const isSelected = (orderQuantities[product.id] || 0) > 0;
               const priceFormatted = formatCurrencyBRL(product.price);
+              const isCellular = isIphoneOrCellularProduct(product);
               const variants =
                 product.variants && product.variants.length > 0
                   ? product.variants
                   : getDefaultVariantsForCategory(product.category);
-              const activeVariant = chosenVariants[product.id] || variants[0];
+              const activeVariant = isCellular
+                ? chosenVariants[product.id] || activeIphoneSummary
+                : chosenVariants[product.id] || variants[0];
               const isWide = index === 0 && category === "Tudo" && !query && !onlyFeatured;
 
               return (
@@ -901,12 +1154,17 @@ export default function Home() {
                     <div className="product-quick-Floating">
                       <button
                         type="button"
-                        className="icon-pill"
+                        className="icon-pill icon-pill-inspect"
                         onClick={() => setInspectedProduct(product)}
-                        aria-label={`Inspecionar ${product.name}`}
-                        title="Ver detalhes"
+                        aria-label={`Espiar ${product.name}`}
+                        title={
+                          isCellular
+                            ? "Espiar e girar em 3D (13 ao 18 Pro Max)"
+                            : "Espiar detalhes"
+                        }
                       >
                         <Eye size={16} />
+                        {isCellular && <span className="pill-3d-label">Espiar 3D</span>}
                       </button>
                       <button
                         type="button"
@@ -932,29 +1190,90 @@ export default function Home() {
                       {priceFormatted ? (
                         <strong className="price-badge">{priceFormatted}</strong>
                       ) : (
-                        <span className="consult-badge">Consultar</span>
+                        <span className="consult-badge">
+                          {isCellular ? activeIphoneModel.name : "Consultar"}
+                        </span>
                       )}
                     </div>
 
-                    <div
-                      className="variant-row"
-                      role="group"
-                      aria-label={`Opções para ${product.name}`}
-                    >
-                      {variants.map((v) => {
-                        const chosen = activeVariant === v;
-                        return (
+                    {isCellular ? (
+                      <div className="cellular-card-config">
+                        <div className="cellular-quick-models" role="group" aria-label="Escolher modelo iPhone 13 ao 18 Pro Max">
+                          {[
+                            "iphone-13",
+                            "iphone-14-pro-max",
+                            "iphone-15-pro-max",
+                            "iphone-16-pro-max",
+                            "iphone-17-pro-max",
+                            "iphone-18-pro-max",
+                          ].map((mId) => {
+                            const mSpec = getIphoneModelById(mId);
+                            const chosen = activeIphoneModel.id === mSpec.id;
+                            return (
+                              <button
+                                key={mSpec.id}
+                                type="button"
+                                className={chosen ? "variant-chip active" : "variant-chip"}
+                                onClick={() => applyIphoneConfiguration(mSpec)}
+                              >
+                                {mSpec.name}
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        <div className="cellular-quick-storages">
+                          <span className="cellular-storage-tag">Memória compatível:</span>
+                          {activeIphoneModel.storages.map((cap) => (
+                            <button
+                              key={cap}
+                              type="button"
+                              className={
+                                activeIphoneStorage === cap
+                                  ? "storage-mini-chip active"
+                                  : "storage-mini-chip"
+                              }
+                              onClick={() =>
+                                applyIphoneConfiguration(
+                                  activeIphoneModel,
+                                  cap,
+                                  activeIphoneFinish
+                                )
+                              }
+                            >
+                              {cap}
+                            </button>
+                          ))}
                           <button
-                            key={v}
                             type="button"
-                            className={chosen ? "variant-chip active" : "variant-chip"}
-                            onClick={() => selectVariant(product.id, v)}
+                            className="storage-3d-trigger"
+                            onClick={() => setInspectedProduct(product)}
                           >
-                            {v}
+                            <RotateCw size={12} /> Ver todos (13 ao 18 Pro Max) em 3D
                           </button>
-                        );
-                      })}
-                    </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <div
+                        className="variant-row"
+                        role="group"
+                        aria-label={`Opções para ${product.name}`}
+                      >
+                        {variants.map((v) => {
+                          const chosen = activeVariant === v;
+                          return (
+                            <button
+                              key={v}
+                              type="button"
+                              className={chosen ? "variant-chip active" : "variant-chip"}
+                              onClick={() => selectVariant(product.id, v)}
+                            >
+                              {v}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
 
                     <div className="product-footer">
                       <button
@@ -981,7 +1300,11 @@ export default function Home() {
                         onClick={() => void handleQuickProductConsult(product)}
                         aria-label={`Cotar ${product.name} (${activeVariant}) no WhatsApp`}
                       >
-                        Cotar {activeVariant} <ArrowUpRight size={15} />
+                        Cotar{" "}
+                        {isCellular
+                          ? `${activeIphoneModel.shortName} ${activeIphoneStorage}`
+                          : activeVariant}{" "}
+                        <ArrowUpRight size={15} />
                       </button>
                     </div>
                   </div>
@@ -1051,11 +1374,14 @@ export default function Home() {
               {orderBuilderProducts.map((p) => {
                 const qty = orderQuantities[p.id] || 0;
                 const active = qty > 0;
+                const isCellular = isIphoneOrCellularProduct(p);
                 const variants =
                   p.variants && p.variants.length > 0
                     ? p.variants
                     : getDefaultVariantsForCategory(p.category);
-                const chosenVar = chosenVariants[p.id] || variants[0];
+                const chosenVar = isCellular
+                  ? chosenVariants[p.id] || activeIphoneSummary
+                  : chosenVariants[p.id] || variants[0];
 
                 return (
                   <div
@@ -1074,7 +1400,9 @@ export default function Home() {
                         <span className="order-select-cat">{p.category}</span>
                         <strong>{p.name}</strong>
                         <small>
-                          {formatCurrencyBRL(p.price) || p.badge || "Sob consulta"}
+                          {isCellular
+                            ? activeIphoneSummary
+                            : formatCurrencyBRL(p.price) || p.badge || "Sob consulta"}
                         </small>
                       </div>
 
@@ -1108,25 +1436,67 @@ export default function Home() {
                     </div>
 
                     <div className="order-select-variants">
-                      {variants.map((v) => (
-                        <button
-                          key={v}
-                          type="button"
-                          className={
-                            chosenVar === v
-                              ? "order-mini-variant active"
-                              : "order-mini-variant"
-                          }
-                          onClick={() => {
-                            selectVariant(p.id, v);
-                            if (!orderQuantities[p.id]) {
-                              adjustProductQuantity(p.id, 1);
+                      {isCellular ? (
+                        <>
+                          {[
+                            "iphone-13",
+                            "iphone-14-pro-max",
+                            "iphone-15-pro-max",
+                            "iphone-16-pro-max",
+                            "iphone-17-pro-max",
+                            "iphone-18-pro-max",
+                          ].map((mId) => {
+                            const mSpec = getIphoneModelById(mId);
+                            const isModelActive = activeIphoneModel.id === mSpec.id;
+                            return (
+                              <button
+                                key={mSpec.id}
+                                type="button"
+                                className={
+                                  isModelActive
+                                    ? "order-mini-variant active"
+                                    : "order-mini-variant"
+                                }
+                                onClick={() => {
+                                  applyIphoneConfiguration(mSpec);
+                                  if (!orderQuantities[p.id]) {
+                                    adjustProductQuantity(p.id, 1);
+                                  }
+                                }}
+                              >
+                                {mSpec.shortName} ({mSpec.storages[0]})
+                              </button>
+                            );
+                          })}
+                          <button
+                            type="button"
+                            className="order-mini-variant"
+                            onClick={() => setInspectedProduct(p)}
+                          >
+                            <RotateCw size={11} /> Girar 3D / Outra Memória
+                          </button>
+                        </>
+                      ) : (
+                        variants.map((v) => (
+                          <button
+                            key={v}
+                            type="button"
+                            className={
+                              chosenVar === v
+                                ? "order-mini-variant active"
+                                : "order-mini-variant"
                             }
-                          }}
-                        >
-                          {v}
-                        </button>
-                      ))}
+                            onClick={() => {
+                              selectVariant(p.id, v);
+                              if (!orderQuantities[p.id]) {
+                                adjustProductQuantity(p.id, 1);
+                              }
+                            }}
+                          >
+                            {v}
+                          </button>
+                        ))
+                      )}
                     </div>
                   </div>
                 );
@@ -1152,7 +1522,7 @@ export default function Home() {
                 <input
                   type="text"
                   maxLength={90}
-                  placeholder="Ex.: iPhone 16 Pro Max 512GB Desert, Perfume Asad, PS5..."
+                  placeholder="Ex.: iPhone 18 Pro Max 1TB Titânio Jade, Perfume Asad, PS5..."
                   value={customDraftTitle}
                   onChange={(e) => setCustomDraftTitle(e.target.value)}
                 />
@@ -1459,7 +1829,7 @@ export default function Home() {
                 type="button"
                 className="button button-outline"
                 onClick={() => void handleCopyMessage(activeOrderMessage)}
-                aria-label="Copiar mensagem da encomenda"
+                aria-label="Copiar texto da encomenda"
                 title="Copiar mensagem"
               >
                 {copiedFeedback ? <Check size={16} /> : <Copy size={16} />}
@@ -1609,7 +1979,7 @@ export default function Home() {
         </a>
       </div>
 
-      {/* Interactive Product Quick-Look Sheet */}
+      {/* Interactive Product Quick-Look Sheet (with 360° 3D Turntable for Celulares / iPhones) */}
       {inspectedProduct && (
         <div
           className="quicklook-backdrop"
@@ -1619,7 +1989,11 @@ export default function Home() {
           }}
         >
           <div
-            className="quicklook-sheet"
+            className={
+              isIphoneOrCellularProduct(inspectedProduct)
+                ? "quicklook-sheet quicklook-sheet-3d"
+                : "quicklook-sheet"
+            }
             role="dialog"
             aria-modal="true"
             aria-labelledby="quicklook-title"
@@ -1633,63 +2007,254 @@ export default function Home() {
               <X size={18} />
             </button>
 
-            <div className="quicklook-media">
-              <img src={inspectedProduct.image} alt={inspectedProduct.name} />
-            </div>
+            {isIphoneOrCellularProduct(inspectedProduct) ? (
+              <>
+                <div className="quicklook-media quicklook-media-3d">
+                  <Iphone3DStudio
+                    model={activeIphoneModel}
+                    finish={activeIphoneFinish}
+                    storage={activeIphoneStorage}
+                  />
+                </div>
 
-            <div className="quicklook-content">
-              <span className="product-tag">{inspectedProduct.category}</span>
-              <h3 id="quicklook-title">{inspectedProduct.name}</h3>
-              <p>{inspectedProduct.description}</p>
+                <div className="quicklook-content quicklook-content-3d">
+                  <div className="quicklook-tags-row">
+                    <span className="product-tag">{inspectedProduct.category}</span>
+                    <span className="quicklook-spec-chip">
+                      {activeIphoneModel.chipset} · {activeIphoneModel.displaySize}
+                    </span>
+                  </div>
 
-              <div className="variant-row">
-                {(inspectedProduct.variants?.length
-                  ? inspectedProduct.variants
-                  : getDefaultVariantsForCategory(inspectedProduct.category)
-                ).map((v) => {
-                  const active =
-                    (chosenVariants[inspectedProduct.id] ||
-                      (inspectedProduct.variants || [])[0]) === v;
-                  return (
+                  <h3 id="quicklook-title">{activeIphoneModel.name}</h3>
+                  <p className="quicklook-highlight">{activeIphoneModel.highlight}</p>
+
+                  {/* 1. Generation Selector (13 to 18) */}
+                  <div className="ql-section">
+                    <span className="ql-label">Geração (do 13 ao 18 Pro Max)</span>
+                    <div className="ql-gen-row">
+                      {iphoneGenerations.map((gen) => (
+                        <button
+                          key={gen}
+                          type="button"
+                          className={
+                            activeIphoneGen === gen ? "ql-gen-btn active" : "ql-gen-btn"
+                          }
+                          onClick={() => {
+                            setActiveIphoneGen(gen);
+                            const defaultInGen =
+                              iphoneLineup.find(
+                                (m) => m.generation === gen && m.tier === "promax"
+                              ) || iphoneLineup.find((m) => m.generation === gen);
+                            if (defaultInGen) {
+                              applyIphoneConfiguration(defaultInGen);
+                            }
+                          }}
+                        >
+                          iPhone {gen}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* 2. Specific Model within Generation */}
+                  <div className="ql-section">
+                    <span className="ql-label">Modelo da linha iPhone {activeIphoneGen}</span>
+                    <div className="variant-row">
+                      {currentGenerationModels.map((m) => {
+                        const active = m.id === activeIphoneModel.id;
+                        return (
+                          <button
+                            key={m.id}
+                            type="button"
+                            className={active ? "variant-chip active" : "variant-chip"}
+                            onClick={() => applyIphoneConfiguration(m)}
+                          >
+                            {m.name}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* 3. Compatible Storage for Selected Model */}
+                  <div className="ql-section">
+                    <span className="ql-label">
+                      Memória compatível com {activeIphoneModel.name}
+                    </span>
+                    <div className="variant-row">
+                      {activeIphoneModel.storages.map((cap) => {
+                        const active = cap === activeIphoneStorage;
+                        return (
+                          <button
+                            key={cap}
+                            type="button"
+                            className={active ? "variant-chip active" : "variant-chip"}
+                            onClick={() =>
+                              applyIphoneConfiguration(
+                                activeIphoneModel,
+                                cap,
+                                activeIphoneFinish
+                              )
+                            }
+                          >
+                            {cap}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* 4. Official Finishes & Condition */}
+                  <div className="ql-section">
+                    <span className="ql-label">
+                      Acabamento ({activeIphoneFinish.name}) & Condição
+                    </span>
+                    <div className="variant-row">
+                      {activeIphoneModel.finishes.map((fin) => {
+                        const active = fin.id === activeIphoneFinish.id;
+                        return (
+                          <button
+                            key={fin.id}
+                            type="button"
+                            className={
+                              active
+                                ? "variant-chip variant-chip-swatch active"
+                                : "variant-chip variant-chip-swatch"
+                            }
+                            onClick={() =>
+                              applyIphoneConfiguration(
+                                activeIphoneModel,
+                                activeIphoneStorage,
+                                fin
+                              )
+                            }
+                          >
+                            <span
+                              className="finish-swatch-dot"
+                              style={{ background: fin.bodyHex }}
+                            />
+                            {fin.name}
+                          </button>
+                        );
+                      })}
+                      {(["Lacrado", "Seminovo"] as const).map((cond) => (
+                        <button
+                          key={cond}
+                          type="button"
+                          className={
+                            selectedIphoneCondition === cond
+                              ? "variant-chip active"
+                              : "variant-chip"
+                          }
+                          onClick={() =>
+                            applyIphoneConfiguration(
+                              activeIphoneModel,
+                              activeIphoneStorage,
+                              activeIphoneFinish,
+                              cond
+                            )
+                          }
+                        >
+                          {cond}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  <div className="ql-summary-banner">
+                    <span>Selecionado:</span>
+                    <strong>{activeIphoneSummary}</strong>
+                  </div>
+
+                  <div className="quicklook-actions">
                     <button
-                      key={v}
                       type="button"
-                      className={active ? "variant-chip active" : "variant-chip"}
-                      onClick={() => selectVariant(inspectedProduct.id, v)}
+                      className="button button-lime"
+                      onClick={() => void handleQuickProductConsult(inspectedProduct)}
                     >
-                      {v}
+                      Chamar no WhatsApp <ArrowUpRight size={16} />
                     </button>
-                  );
-                })}
-              </div>
+                    <button
+                      type="button"
+                      className="button button-outline"
+                      onClick={() => {
+                        const id = inspectedProduct.id;
+                        setInspectedProduct(null);
+                        if (!orderQuantities[id]) {
+                          toggleProductInOrder(id, true);
+                        } else {
+                          document
+                            .getElementById("encomenda")
+                            ?.scrollIntoView({ behavior: "smooth" });
+                        }
+                      }}
+                    >
+                      Incluir na encomenda
+                    </button>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="quicklook-media">
+                  <img src={inspectedProduct.image} alt={inspectedProduct.name} />
+                </div>
 
-              <div className="quicklook-actions">
-                <button
-                  type="button"
-                  className="button button-lime"
-                  onClick={() => void handleQuickProductConsult(inspectedProduct)}
-                >
-                  Chamar no WhatsApp <ArrowUpRight size={16} />
-                </button>
-                <button
-                  type="button"
-                  className="button button-outline"
-                  onClick={() => {
-                    const id = inspectedProduct.id;
-                    setInspectedProduct(null);
-                    if (!orderQuantities[id]) {
-                      toggleProductInOrder(id, true);
-                    } else {
-                      document
-                        .getElementById("encomenda")
-                        ?.scrollIntoView({ behavior: "smooth" });
-                    }
-                  }}
-                >
-                  Incluir na encomenda
-                </button>
-              </div>
-            </div>
+                <div className="quicklook-content">
+                  <span className="product-tag">{inspectedProduct.category}</span>
+                  <h3 id="quicklook-title">{inspectedProduct.name}</h3>
+                  <p>{inspectedProduct.description}</p>
+
+                  <div className="variant-row">
+                    {(inspectedProduct.variants?.length
+                      ? inspectedProduct.variants
+                      : getDefaultVariantsForCategory(inspectedProduct.category)
+                    ).map((v) => {
+                      const active =
+                        (chosenVariants[inspectedProduct.id] ||
+                          (inspectedProduct.variants || [])[0]) === v;
+                      return (
+                        <button
+                          key={v}
+                          type="button"
+                          className={active ? "variant-chip active" : "variant-chip"}
+                          onClick={() => selectVariant(inspectedProduct.id, v)}
+                        >
+                          {v}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <div className="quicklook-actions">
+                    <button
+                      type="button"
+                      className="button button-lime"
+                      onClick={() => void handleQuickProductConsult(inspectedProduct)}
+                    >
+                      Chamar no WhatsApp <ArrowUpRight size={16} />
+                    </button>
+                    <button
+                      type="button"
+                      className="button button-outline"
+                      onClick={() => {
+                        const id = inspectedProduct.id;
+                        setInspectedProduct(null);
+                        if (!orderQuantities[id]) {
+                          toggleProductInOrder(id, true);
+                        } else {
+                          document
+                            .getElementById("encomenda")
+                            ?.scrollIntoView({ behavior: "smooth" });
+                        }
+                      }}
+                    >
+                      Incluir na encomenda
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
       )}

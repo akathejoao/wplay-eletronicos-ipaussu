@@ -4,3 +4,7 @@ node_modules/
 !.env.example
 *.tsbuildinfo
 .vercel/
+.impeccable/
+.playwright-mcp/
+outputs/
+work/

@@ -193,6 +193,7 @@ export function isValidImageSrc(src: string | null | undefined): boolean {
   if (!src || typeof src !== "string") return false;
   const trimmed = src.trim();
   if (!trimmed) return false;
+  if (/^\/api\/media\/image-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}\.(webp|png|jpg)$/.test(trimmed)) return true;
   if (trimmed.startsWith("/images/") || trimmed.startsWith("data:image/")) return true;
   try {
     const parsed = new URL(trimmed);

@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -62,6 +63,8 @@ import {
   verifyAdminCredentials,
 } from "@/lib/catalog";
 import { createClient, isLocalDemoHost } from "@/lib/supabase";
+import { notifyCatalogChanged } from "@/lib/catalog-cache";
+import { uploadCatalogImage } from "@/lib/catalog-media";
 import {
   productColumns,
   productFromDatabase,
@@ -73,6 +76,11 @@ import {
 import { AdminAccessManager } from "@/app/components/AdminAccessManager";
 
 type AdminTab = "fotos" | "produtos" | "categorias" | "seguranca" | "config";
+type PhotoFramingDraft = {
+  productId: string;
+  imageScale: number;
+  imagePosition: string;
+};
 
 const SESSION_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
 const MAX_LOGIN_ATTEMPTS = 5;
@@ -148,6 +156,10 @@ export default function AdminPage() {
   const [photoUrlDraft, setPhotoUrlDraft] = useState("");
   const [newGalleryLabel, setNewGalleryLabel] = useState("");
   const [selectedHeroIdx, setSelectedHeroIdx] = useState<number>(0);
+  const [heroImageUrlDraft, setHeroImageUrlDraft] = useState<{ slideId: string; value: string } | null>(null);
+  const [heroTitleDraft, setHeroTitleDraft] = useState<{ slideId: string; value: string } | null>(null);
+  const [framingDraft, setFramingDraft] = useState<PhotoFramingDraft | null>(null);
+  const [savingFraming, setSavingFraming] = useState(false);
 
   // Products CRUD state ("produtos" tab)
   const [editingProduct, setEditingProduct] = useState<Product | null>(null);
@@ -166,8 +178,13 @@ export default function AdminPage() {
 
   const supabase = useMemo(() => createClient(), []);
   const localDemoMode = !supabase && isLocalDemoHost();
-  const draftStateRef = useRef({ settings, draftSettings, hoursTextarea, editingProduct });
-  draftStateRef.current = { settings, draftSettings, hoursTextarea, editingProduct };
+  const productsRef = useRef(products);
+  productsRef.current = products;
+  const productPatchQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const framingDraftRef = useRef(framingDraft);
+  framingDraftRef.current = framingDraft;
+  const draftStateRef = useRef({ settings, draftSettings, hoursTextarea, editingProduct, framingDraft });
+  draftStateRef.current = { settings, draftSettings, hoursTextarea, editingProduct, framingDraft };
 
   const loadCloudData = useCallback(async (background = false) => {
     if (!supabase) return { success: false, error: "Conexão com a loja indisponível." };
@@ -211,23 +228,29 @@ export default function AdminPage() {
               settingsResult.data as unknown as Record<string, unknown>
             )
           )
-        : defaultStoreSettings;
-      setProducts(loadedProducts);
+          : defaultStoreSettings;
       const currentDraft = draftStateRef.current;
       const hasDirtyDraft =
         currentDraft.editingProduct !== null ||
+        currentDraft.framingDraft !== null ||
         JSON.stringify(currentDraft.draftSettings) !== JSON.stringify(currentDraft.settings) ||
         currentDraft.hoursTextarea !== currentDraft.settings.hours_lines.join("\n");
+      if (!background || !hasDirtyDraft) {
+        productsRef.current = loadedProducts;
+        setProducts(loadedProducts);
+      }
       if (!background || !hasDirtyDraft) {
         setSettings(loadedSettings);
         setDraftSettings(loadedSettings);
         setHoursTextarea(loadedSettings.hours_lines.join("\n"));
       }
-      setSelectedPhotoProductId((currentId) =>
-        loadedProducts.some((product) => product.id === currentId)
-          ? currentId
-          : loadedProducts[0]?.id || ""
-      );
+      if (!background || !hasDirtyDraft) {
+        setSelectedPhotoProductId((currentId) =>
+          loadedProducts.some((product) => product.id === currentId)
+            ? currentId
+            : loadedProducts[0]?.id || ""
+        );
+      }
       setCloudDataLoaded(true);
       return { success: true, error: "" };
     } catch (caught) {
@@ -441,9 +464,17 @@ export default function AdminPage() {
   useEffect(() => {
     if (!supabase || !isAuthenticated) return;
     let refreshing = false;
+    let lastRefreshAt = 0;
+    const refreshCooldownMs = 5 * 60 * 1000;
     const refreshCloudState = async () => {
-      if (refreshing || document.visibilityState === "hidden") return;
+      const now = Date.now();
+      if (
+        refreshing ||
+        document.visibilityState === "hidden" ||
+        now - lastRefreshAt < refreshCooldownMs
+      ) return;
       refreshing = true;
+      lastRefreshAt = now;
       try {
         const { data: authData, error: authError } = await supabase.auth.getUser();
         if (authError || !authData.user) {
@@ -476,15 +507,23 @@ export default function AdminPage() {
     const refreshWhenVisible = () => {
       if (document.visibilityState === "visible") void refreshCloudState();
     };
-    const poll = window.setInterval(() => void refreshCloudState(), 60_000);
     window.addEventListener("focus", refreshWhenVisible);
     document.addEventListener("visibilitychange", refreshWhenVisible);
     return () => {
-      window.clearInterval(poll);
       window.removeEventListener("focus", refreshWhenVisible);
       document.removeEventListener("visibilitychange", refreshWhenVisible);
     };
-  }, [cloudLoadError, isAuthenticated, loadCloudData, supabase]);
+  }, [isAuthenticated, loadCloudData, supabase]);
+
+  useEffect(() => {
+    if (!framingDraft) return;
+    const warnBeforeLeaving = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnBeforeLeaving);
+    return () => window.removeEventListener("beforeunload", warnBeforeLeaving);
+  }, [framingDraft]);
 
   // Live Lockout Countdown Timer
   useEffect(() => {
@@ -662,18 +701,53 @@ export default function AdminPage() {
     }
   };
 
+  const notifyCatalogCacheBestEffort = async (client: SupabaseClient) => {
+    let notified = false;
+    try {
+      notified = await notifyCatalogChanged(client);
+    } catch {
+      notified = false;
+    }
+    if (!notified) {
+      window.setTimeout(
+        () => showToast("Dados salvos no banco; a vitrine pode levar mais tempo para refletir a alteração."),
+        0
+      );
+    }
+  };
+
   const persistProducts = async (next: Product[], deletedId?: string) => {
     if (supabase) {
+      const currentProducts = productsRef.current;
+      const changedProducts = deletedId
+        ? []
+        : next.filter((product) => {
+            const current = currentProducts.find((item) => item.id === product.id);
+            if (!current) return true;
+            const stableCurrent = normalizeProduct(current, 0);
+            const stableNext = normalizeProduct(product, 0);
+            return JSON.stringify(stableCurrent) !== JSON.stringify(stableNext);
+          });
+      if (!deletedId && changedProducts.length === 0) {
+        productsRef.current = next;
+        setProducts(next);
+        return true;
+      }
       if (!(await ensureCloudOwner())) return false;
       try {
         const result = deletedId
-          ? await supabase.from("products").delete().eq("id", deletedId)
-          : await supabase.from("products").upsert(next.map(productToDatabase));
+          ? await supabase.from("products").delete().eq("id", deletedId).select("id")
+          : await supabase.from("products").upsert(changedProducts.map(productToDatabase));
         if (result.error) {
           showToast(`Falha ao salvar produtos online: ${result.error.message}`);
           return false;
         }
+        const wroteRows = deletedId
+          ? (result.data?.length ?? 0) > 0
+          : changedProducts.length > 0;
+        productsRef.current = next;
         setProducts(next);
+        if (wroteRows) await notifyCatalogCacheBestEffort(supabase);
         return true;
       } catch (caught) {
         showToast(
@@ -692,6 +766,7 @@ export default function AdminPage() {
     try {
       localStorage.setItem(productsStorageKey, JSON.stringify(next));
       window.dispatchEvent(new Event("storage"));
+      productsRef.current = next;
       setProducts(next);
       return true;
     } catch {
@@ -701,13 +776,35 @@ export default function AdminPage() {
   };
 
   const persistSettings = async (nextSettings: StoreSettings) => {
-    const normalized = normalizeSettings(nextSettings);
+    const normalizedSettings = normalizeSettings(nextSettings);
+    const normalized = {
+      ...normalizedSettings,
+      custom_gallery: normalizedSettings.custom_gallery.slice(0, 60),
+    };
     if (supabase) {
+      const nextPublicSettings = settingsToDatabase(normalized);
+      const currentPublicSettings = settingsToDatabase(normalizeSettings(settings));
+      const changedColumns: Record<string, unknown> = {};
+      for (const [column, value] of Object.entries(nextPublicSettings)) {
+        if (column === "id" || column === "updated_at") continue;
+        if (
+          JSON.stringify(value) !==
+          JSON.stringify(currentPublicSettings[column as keyof typeof currentPublicSettings])
+        ) {
+          changedColumns[column] = value;
+        }
+      }
+      if (Object.keys(changedColumns).length === 0) {
+        setSettings(normalized);
+        setDraftSettings(normalized);
+        showToast("Nenhuma alteração pública para sincronizar.");
+        return true;
+      }
       if (!(await ensureCloudOwner())) return false;
       try {
         const { error } = await supabase
           .from("store_settings")
-          .upsert(settingsToDatabase(normalized));
+          .upsert({ id: true, ...changedColumns });
         if (error) {
           showToast(`Falha ao salvar configurações online: ${error.message}`);
           return false;
@@ -722,6 +819,7 @@ export default function AdminPage() {
       }
       setSettings(normalized);
       setDraftSettings(normalized);
+      await notifyCatalogCacheBestEffort(supabase);
       showToast("Configurações sincronizadas!");
       return true;
     }
@@ -1052,12 +1150,75 @@ export default function AdminPage() {
   };
 
   // Photo Studio handlers
-  const updatePhotoForActiveProduct = async (patch: Partial<Product>, toastMsg?: string) => {
+  const persistProductPatch = async (productId: string, patch: Partial<Product>) => {
+    let saved = false;
+    const operation = productPatchQueueRef.current.then(async () => {
+      const current = productsRef.current;
+      if (!current.some((product) => product.id === productId)) return;
+      const next = current.map((product) =>
+        product.id === productId ? { ...product, ...patch } : product
+      );
+      saved = await persistProducts(next);
+    });
+    productPatchQueueRef.current = operation.then(() => undefined, () => undefined);
+    await operation;
+    return saved;
+  };
+
+  const clearFramingDraft = () => {
+    framingDraftRef.current = null;
+    setFramingDraft(null);
+  };
+
+  const updateFramingDraft = (patch: Partial<PhotoFramingDraft>) => {
     if (!activePhotoProduct) return;
-    const next = products.map((p) =>
-      p.id === activePhotoProduct.id ? { ...p, ...patch } : p
-    );
-    if (!(await persistProducts(next))) return;
+    const current = framingDraftRef.current?.productId === activePhotoProduct.id
+      ? framingDraftRef.current
+      : {
+          productId: activePhotoProduct.id,
+          imageScale: activePhotoProduct.imageScale ?? 1,
+          imagePosition: activePhotoProduct.imagePosition || "50% 50%",
+        };
+    const next = { ...current, ...patch, productId: activePhotoProduct.id };
+    framingDraftRef.current = next;
+    setFramingDraft(next);
+  };
+
+  const saveFramingDraft = async () => {
+    const draft = framingDraftRef.current;
+    if (!draft) return true;
+    if (savingFraming) return false;
+    setSavingFraming(true);
+    try {
+      const saved = await persistProductPatch(draft.productId, {
+        imageScale: draft.imageScale,
+        imagePosition: draft.imagePosition,
+      });
+      if (saved && framingDraftRef.current === draft) clearFramingDraft();
+      return saved;
+    } finally {
+      setSavingFraming(false);
+    }
+  };
+
+  const changeTab = (nextTab: AdminTab) => {
+    if (tab === "fotos" && nextTab !== "fotos" && framingDraftRef.current) {
+      showToast("Salve o enquadramento antes de sair do Studio de Fotos.");
+      return false;
+    }
+    setTab(nextTab);
+    return true;
+  };
+
+  const updatePhotoForActiveProduct = async (patch: Partial<Product>, toastMsg?: string) => {
+    if (!activePhotoProduct || savingFraming) return;
+    const productId = activePhotoProduct.id;
+    const draft = framingDraftRef.current;
+    const patchWithDraft = draft?.productId === productId
+      ? { imageScale: draft.imageScale, imagePosition: draft.imagePosition, ...patch }
+      : patch;
+    if (!(await persistProductPatch(productId, patchWithDraft))) return;
+    if (draft?.productId === productId && framingDraftRef.current === draft) clearFramingDraft();
     if (toastMsg) showToast(toastMsg);
   };
 
@@ -1070,26 +1231,30 @@ export default function AdminPage() {
     const idToUpdate = targetProductId || activePhotoProduct?.id;
     if (!idToUpdate) return;
     try {
-      const dataUrl = await compressImageFile(file, 1080);
-      const targetProd = products.find((p) => p.id === idToUpdate);
-      const next = products.map((p) =>
-        p.id === idToUpdate ? { ...p, image: dataUrl } : p
-      );
-      if (!(await persistProducts(next))) return;
+      const imageUrl = supabase
+        ? await uploadCatalogImage(supabase, file, 1080)
+        : await compressImageFile(file, 1080);
+      const targetProd = productsRef.current.find((p) => p.id === idToUpdate);
+      const draft = framingDraftRef.current;
+      const imagePatch = draft?.productId === idToUpdate
+        ? { image: imageUrl, imageScale: draft.imageScale, imagePosition: draft.imagePosition }
+        : { image: imageUrl };
+      if (!(await persistProductPatch(idToUpdate, imagePatch))) return;
+      if (draft?.productId === idToUpdate && framingDraftRef.current === draft) clearFramingDraft();
 
       const nextGallery = [
         {
           id: `upload-${Date.now()}`,
           label: newGalleryLabel.trim() || targetProd?.name || "Foto enviada",
-          src: dataUrl,
+          src: imageUrl,
         },
         ...(settings.custom_gallery || studioGallery),
-      ];
+      ].slice(0, 60);
       if (!(await persistSettings({ ...settings, custom_gallery: nextGallery }))) return;
       setNewGalleryLabel("");
       showToast("Nova foto enviada e aplicada ao produto!");
-    } catch {
-      showToast("Não foi possível carregar essa imagem.");
+    } catch (caught) {
+      showToast(caught instanceof Error ? caught.message : "Não foi possível carregar essa imagem.");
     }
   };
 
@@ -1113,22 +1278,33 @@ export default function AdminPage() {
     const file = e.target.files?.[0];
     if (!file) return;
     try {
-      const dataUrl = await compressImageFile(file, 1200);
+      const imageUrl = supabase
+        ? await uploadCatalogImage(supabase, file, 1200)
+        : await compressImageFile(file, 1200);
       const slides = [...(settings.hero_slides || defaultStoreSettings.hero_slides)];
       if (!slides[selectedHeroIdx]) return;
-      slides[selectedHeroIdx] = { ...slides[selectedHeroIdx], image: dataUrl };
+      slides[selectedHeroIdx] = { ...slides[selectedHeroIdx], image: imageUrl };
       if (!(await persistSettings({ ...settings, hero_slides: slides }))) return;
+      setHeroImageUrlDraft(null);
       showToast("Foto do destaque principal atualizada!");
-    } catch {
-      showToast("Erro ao processar foto do destaque.");
+    } catch (caught) {
+      showToast(caught instanceof Error ? caught.message : "Erro ao processar foto do destaque.");
     }
   };
 
   const handleUpdateHeroSlide = async (patch: Partial<HeroSlideConfig>) => {
     const slides = [...(settings.hero_slides || defaultStoreSettings.hero_slides)];
     if (!slides[selectedHeroIdx]) return;
+    if (
+      supabase &&
+      patch.image?.trim().toLowerCase().startsWith("data:image/") &&
+      patch.image !== slides[selectedHeroIdx].image
+    ) {
+      showToast("Use o envio de imagem para salvar fotos da nuvem; URLs data:image não são aceitas.");
+      return false;
+    }
     slides[selectedHeroIdx] = { ...slides[selectedHeroIdx], ...patch };
-    await persistSettings({ ...settings, hero_slides: slides });
+    return await persistSettings({ ...settings, hero_slides: slides });
   };
 
   // Product Form handlers
@@ -1215,6 +1391,14 @@ export default function AdminPage() {
 
   const handleSaveStoreConfig = async (e: React.FormEvent) => {
     e.preventDefault();
+    const logoUrl = draftSettings.logo_url.trim();
+    if (
+      /^data:image\//i.test(logoUrl) &&
+      logoUrl !== settings.logo_url.trim()
+    ) {
+      showToast("Data URI não pode ser usado como logo. Informe uma URL ou caminho de imagem.");
+      return;
+    }
     const parsedHours = hoursTextarea
       .split("\n")
       .map((l) => l.trim())
@@ -1408,7 +1592,10 @@ export default function AdminPage() {
     );
   }
 
-  const pos = parsePositionPercent(activePhotoProduct?.imagePosition);
+  const framingProduct = activePhotoProduct && framingDraft?.productId === activePhotoProduct.id
+    ? { ...activePhotoProduct, imageScale: framingDraft.imageScale, imagePosition: framingDraft.imagePosition }
+    : activePhotoProduct;
+  const pos = parsePositionPercent(framingProduct?.imagePosition);
   const currentHeroSlides = settings.hero_slides || defaultStoreSettings.hero_slides;
   const activeHeroSlide = currentHeroSlides[selectedHeroIdx] || currentHeroSlides[0];
 
@@ -1444,7 +1631,7 @@ export default function AdminPage() {
             role="tab"
             aria-selected={tab === "fotos"}
             className={tab === "fotos" ? "admin-nav-tab active" : "admin-nav-tab"}
-            onClick={() => setTab("fotos")}
+            onClick={() => changeTab("fotos")}
           >
             <Camera size={16} /> Fotos
           </button>
@@ -1454,8 +1641,7 @@ export default function AdminPage() {
             aria-selected={tab === "produtos"}
             className={tab === "produtos" ? "admin-nav-tab active" : "admin-nav-tab"}
             onClick={() => {
-              setTab("produtos");
-              setEditingProduct(null);
+              if (changeTab("produtos")) setEditingProduct(null);
             }}
           >
             <Sparkles size={16} /> Produtos ({products.length})
@@ -1465,7 +1651,7 @@ export default function AdminPage() {
             role="tab"
             aria-selected={tab === "categorias"}
             className={tab === "categorias" ? "admin-nav-tab active" : "admin-nav-tab"}
-            onClick={() => setTab("categorias")}
+            onClick={() => changeTab("categorias")}
           >
             <Layers size={16} /> Categorias ({allCategories.length})
           </button>
@@ -1474,7 +1660,7 @@ export default function AdminPage() {
             role="tab"
             aria-selected={tab === "seguranca"}
             className={tab === "seguranca" ? "admin-nav-tab active" : "admin-nav-tab"}
-            onClick={() => setTab("seguranca")}
+            onClick={() => changeTab("seguranca")}
           >
             <ShieldCheck size={16} /> Segurança & Links
           </button>
@@ -1483,20 +1669,35 @@ export default function AdminPage() {
             role="tab"
             aria-selected={tab === "config"}
             className={tab === "config" ? "admin-nav-tab active" : "admin-nav-tab"}
-            onClick={() => setTab("config")}
+            onClick={() => changeTab("config")}
           >
             <Sliders size={16} /> Dados da Loja
           </button>
         </nav>
 
         <div className="admin-topbar-actions">
-          <Link href="/" className="button button-outline">
+          <Link
+            href="/"
+            className="button button-outline"
+            onClick={(event) => {
+              if (framingDraftRef.current) {
+                event.preventDefault();
+                showToast("Salve o enquadramento antes de sair do Studio de Fotos.");
+              }
+            }}
+          >
             <Eye size={15} /> Ver Loja <ArrowUpRight size={14} />
           </Link>
           <button
             type="button"
             className="button button-quiet"
-            onClick={() => void handleLogout("Bloqueio manual pelo administrador")}
+            onClick={() => {
+              if (framingDraftRef.current) {
+                showToast("Salve o enquadramento antes de trancar o painel.");
+                return;
+              }
+              void handleLogout("Bloqueio manual pelo administrador");
+            }}
           >
             <LogOut size={15} /> Trancar
           </button>
@@ -1521,7 +1722,14 @@ export default function AdminPage() {
                       key={prod.id}
                       type="button"
                       className={active ? "photo-prod-item active" : "photo-prod-item"}
-                      onClick={() => setSelectedPhotoProductId(prod.id)}
+                      onClick={() => {
+                        if (prod.id === activePhotoProduct.id) return;
+                        if (framingDraftRef.current) {
+                          showToast("Salve o enquadramento antes de trocar de produto.");
+                          return;
+                        }
+                        setSelectedPhotoProductId(prod.id);
+                      }}
                     >
                       <img
                         src={prod.image}
@@ -1565,8 +1773,8 @@ export default function AdminPage() {
                         }
                         style={{
                           objectFit: activePhotoProduct.imageFit || "cover",
-                          objectPosition: activePhotoProduct.imagePosition || "50% 50%",
-                          transform: `scale(${activePhotoProduct.imageScale || 1})`,
+                          objectPosition: framingProduct?.imagePosition || "50% 50%",
+                          transform: `scale(${framingProduct?.imageScale || 1})`,
                         }}
                       />
                       <div className="product-top-bar">
@@ -1649,19 +1857,16 @@ export default function AdminPage() {
                     <div className="framing-sliders">
                       <label>
                         <span>
-                          Zoom da Foto ({Math.round((activePhotoProduct.imageScale || 1) * 100)}%)
+                          Zoom da Foto ({Math.round((framingProduct?.imageScale || 1) * 100)}%)
                         </span>
                         <input
                           type="range"
                           min="0.8"
                           max="1.45"
                           step="0.05"
-                          value={activePhotoProduct.imageScale || 1}
-                          onChange={(e) =>
-                            void updatePhotoForActiveProduct({
-                              imageScale: Number(e.target.value),
-                            })
-                          }
+                          value={framingProduct?.imageScale || 1}
+                          disabled={savingFraming}
+                          onChange={(e) => updateFramingDraft({ imageScale: Number(e.target.value) })}
                         />
                       </label>
 
@@ -1673,11 +1878,8 @@ export default function AdminPage() {
                           max="100"
                           step="5"
                           value={pos.x}
-                          onChange={(e) =>
-                            void updatePhotoForActiveProduct({
-                              imagePosition: `${e.target.value}% ${pos.y}%`,
-                            })
-                          }
+                          disabled={savingFraming}
+                          onChange={(e) => updateFramingDraft({ imagePosition: `${e.target.value}% ${pos.y}%` })}
                         />
                       </label>
 
@@ -1689,14 +1891,24 @@ export default function AdminPage() {
                           max="100"
                           step="5"
                           value={pos.y}
-                          onChange={(e) =>
-                            void updatePhotoForActiveProduct({
-                              imagePosition: `${pos.x}% ${e.target.value}%`,
-                            })
-                          }
+                          disabled={savingFraming}
+                          onChange={(e) => updateFramingDraft({ imagePosition: `${pos.x}% ${e.target.value}%` })}
                         />
                       </label>
                     </div>
+                    {framingDraft?.productId === activePhotoProduct.id && (
+                      <div className="form-actions">
+                        <span className="admin-sub">Enquadramento alterado. Salve para publicar.</span>
+                        <button
+                          type="button"
+                          className="button button-lime"
+                          disabled={savingFraming}
+                          onClick={() => void saveFramingDraft()}
+                        >
+                          <Save size={15} /> {savingFraming ? "Salvando..." : "Salvar enquadramento"}
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -1744,6 +1956,14 @@ export default function AdminPage() {
                     onSubmit={(e) => {
                       e.preventDefault();
                       if (!photoUrlDraft.trim()) return;
+                      if (
+                        supabase &&
+                        /^data:image\//i.test(photoUrlDraft.trim()) &&
+                        photoUrlDraft.trim() !== activePhotoProduct.image
+                      ) {
+                        showToast("Use o envio de imagem para salvar fotos da nuvem; URLs data:image não são aceitas.");
+                        return;
+                      }
                       void updatePhotoForActiveProduct(
                         { image: photoUrlDraft.trim() },
                         "URL da foto atualizada!"
@@ -1838,18 +2058,30 @@ export default function AdminPage() {
                         <div className="hero-slide-fields">
                           <input
                             type="text"
-                            value={activeHeroSlide.title}
-                            onChange={(e) =>
-                              void handleUpdateHeroSlide({ title: e.target.value })
-                            }
+                            value={heroTitleDraft?.slideId === activeHeroSlide.id
+                              ? heroTitleDraft.value
+                              : activeHeroSlide.title}
+                            onChange={(e) => setHeroTitleDraft({ slideId: activeHeroSlide.id, value: e.target.value })}
+                            onBlur={(e) => {
+                              const title = e.currentTarget.value;
+                              void handleUpdateHeroSlide({ title }).then((saved) => {
+                                if (saved) setHeroTitleDraft(null);
+                              });
+                            }}
                             placeholder="Título do slide"
                           />
                           <input
                             type="text"
-                            value={activeHeroSlide.image}
-                            onChange={(e) =>
-                              void handleUpdateHeroSlide({ image: e.target.value })
-                            }
+                            value={heroImageUrlDraft?.slideId === activeHeroSlide.id
+                              ? heroImageUrlDraft.value
+                              : activeHeroSlide.image}
+                            onChange={(e) => setHeroImageUrlDraft({ slideId: activeHeroSlide.id, value: e.target.value })}
+                            onBlur={(e) => {
+                              const image = e.currentTarget.value;
+                              void handleUpdateHeroSlide({ image }).then((saved) => {
+                                if (saved) setHeroImageUrlDraft(null);
+                              });
+                            }}
                             placeholder="URL da foto do slide"
                           />
                           <label className="button button-outline">

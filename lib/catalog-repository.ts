@@ -6,6 +6,9 @@ export const productColumns =
 export const settingsColumns =
   "id,store_name,logo_url,hero_headline,whatsapp_url,whatsapp_phone,instagram_url,instagram_handle,city,address_line,postal_code,maps_url,hours_lines,custom_categories,custom_gallery,hero_slides,attendance_note";
 
+export const publicSettingsColumns =
+  "id,store_name,logo_url,hero_headline,whatsapp_url,whatsapp_phone,instagram_url,instagram_handle,city,address_line,postal_code,maps_url,hours_lines,custom_categories,hero_slides,attendance_note";
+
 export function productFromDatabase(row: Record<string, unknown>): Partial<Product> {
   return {
     id: row.id as string,

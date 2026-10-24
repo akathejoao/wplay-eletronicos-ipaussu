@@ -68,13 +68,12 @@ import {
 } from "@/lib/iphone-models";
 import { Iphone3DStudio } from "@/app/components/Iphone3DStudio";
 import { Product3DStudio } from "@/app/components/Product3DStudio";
-import { createClient, isLocalDemoHost } from "@/lib/supabase";
+import { isLocalDemoHost } from "@/lib/supabase";
 import {
-  productColumns,
   productFromDatabase,
-  settingsColumns,
   settingsFromDatabase,
 } from "@/lib/catalog-repository";
+import { catalogCacheSeconds, catalogChangedEvent, publicCatalogStorageKey } from "@/lib/catalog-cache";
 import { StoreAtmosphere } from "@/app/components/StoreAtmosphere";
 
 type FulfillmentMode = "Retirar na loja (Ipaussu)" | "Receber por entrega";
@@ -182,7 +181,10 @@ export default function Home() {
   const [notice, setNotice] = useState("");
   const [catalogLoadError, setCatalogLoadError] = useState("");
   const [safeLinkRecovery, setSafeLinkRecovery] = useState<SafeLinkRecoveryState>(null);
-  const supabase = useMemo(() => createClient(), []);
+  const cloudCatalogConfigured = Boolean(
+    process.env.NEXT_PUBLIC_SUPABASE_URL &&
+    (process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)
+  );
 
   // Scroll-Driven Atmosphere Stage
   const [atmosphereStage, setAtmosphereStage] = useState<AtmosphereStage>("hero");
@@ -354,15 +356,12 @@ export default function Home() {
   };
 
   useEffect(() => {
-    if (!supabase) {
+    if (!cloudCatalogConfigured) {
       if (!isLocalDemoHost()) {
         setProducts([]);
-        setCatalogLoadError(
-          "A vitrine precisa ser configurada com a conexão do Supabase para carregar o catálogo."
-        );
+        setCatalogLoadError("A vitrine está temporariamente indisponível.");
         return;
       }
-
       const syncFromLocal = () => {
         setProducts(initialProducts);
         setSettings(defaultStoreSettings);
@@ -370,104 +369,127 @@ export default function Home() {
           const savedProducts = localStorage.getItem(productsStorageKey);
           if (savedProducts) {
             const parsed = JSON.parse(savedProducts) as Partial<Product>[];
-            if (Array.isArray(parsed)) {
-              setProducts(parsed.map((item, idx) => normalizeProduct(item, idx)));
-            }
+            if (Array.isArray(parsed)) setProducts(parsed.map((item, index) => normalizeProduct(item, index)));
           }
           const savedSettings = localStorage.getItem(settingsStorageKey);
-          if (savedSettings) {
-            const parsedSettings = JSON.parse(savedSettings) as Partial<StoreSettings>;
-            setSettings(normalizeSettings(parsedSettings));
-          }
+          if (savedSettings) setSettings(normalizeSettings(JSON.parse(savedSettings) as Partial<StoreSettings>));
         } catch {
-          // ignore read error
+          setCatalogLoadError("Não foi possível carregar os dados locais.");
         }
       };
-
       syncFromLocal();
       window.addEventListener("storage", syncFromLocal);
       return () => window.removeEventListener("storage", syncFromLocal);
     }
 
-    setProducts([]);
-    setSettings(defaultStoreSettings);
+    type CatalogSnapshot = { products: Record<string, unknown>[]; settings: Record<string, unknown> | null };
+    type CachedCatalog = { source: string; savedAt: number; snapshot: CatalogSnapshot };
+    const source = process.env.NEXT_PUBLIC_SUPABASE_URL || "";
+    const cacheMilliseconds = catalogCacheSeconds * 1000;
     let cancelled = false;
     let loading = false;
+    let lastSuccessfulFetch = 0;
+    let retryAfter = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const controller = new AbortController();
+
+    const applySnapshot = (snapshot: CatalogSnapshot) => {
+      if (!Array.isArray(snapshot.products)) throw new Error("Catálogo inválido.");
+      setProducts(snapshot.products.map((row, index) => normalizeProduct(productFromDatabase(row), index)));
+      setSettings(snapshot.settings ? normalizeSettings(settingsFromDatabase(snapshot.settings)) : defaultStoreSettings);
+      setCatalogLoadError("");
+    };
+
+    const readSavedCatalog = () => {
+      try {
+        const raw = localStorage.getItem(publicCatalogStorageKey);
+        if (!raw) return;
+        const cached = JSON.parse(raw) as CachedCatalog;
+        if (cached.source !== source || !Number.isFinite(cached.savedAt) || !cached.snapshot) return;
+        if (cached.savedAt > Date.now() || Date.now() - cached.savedAt > 24 * 60 * 60 * 1000) return;
+        applySnapshot(cached.snapshot);
+        lastSuccessfulFetch = cached.savedAt;
+      } catch {
+        lastSuccessfulFetch = 0;
+      }
+    };
 
     const syncFromCloud = async () => {
       if (loading || cancelled || document.visibilityState === "hidden") return;
+      const now = Date.now();
+      if (now < retryAfter || now - lastSuccessfulFetch < cacheMilliseconds) return;
       loading = true;
       try {
-        const [productsResult, settingsResult] = await Promise.all([
-          supabase
-            .from("products")
-            .select(productColumns)
-            .eq("published", true)
-            .order("created_at", { ascending: false }),
-          supabase
-            .from("store_settings")
-            .select(settingsColumns)
-            .eq("id", true)
-            .maybeSingle(),
-        ]);
+        const response = await fetch("/api/catalog", {
+          signal: controller.signal,
+          headers: { Accept: "application/json" },
+        });
+        if (!response.ok) throw new Error("Não foi possível atualizar a vitrine. Tente novamente em alguns minutos.");
+        const snapshot = await response.json() as CatalogSnapshot;
         if (cancelled) return;
-
-        const errors: string[] = [];
-        if (productsResult.error) {
-          errors.push("Não foi possível carregar os produtos.");
-        } else {
-          const rows = productsResult.data || [];
-          setProducts(
-            rows.map((row, idx) =>
-              normalizeProduct(
-                productFromDatabase(row as unknown as Record<string, unknown>),
-                idx
-              )
-            )
-          );
+        applySnapshot(snapshot);
+        lastSuccessfulFetch = Date.now();
+        retryAfter = 0;
+        try {
+          localStorage.setItem(publicCatalogStorageKey, JSON.stringify({ source, savedAt: lastSuccessfulFetch, snapshot }));
+        } catch {
+          return;
         }
-        if (settingsResult.error) {
-          errors.push("Não foi possível carregar as configurações da loja.");
-        } else {
-          setSettings(
-            settingsResult.data
-              ? normalizeSettings(
-                  settingsFromDatabase(
-                    settingsResult.data as unknown as Record<string, unknown>
-                  )
-                )
-              : defaultStoreSettings
-          );
-        }
-        setCatalogLoadError(errors.join(" "));
-      } catch (error) {
+      } catch (caught) {
         if (!cancelled) {
-          setCatalogLoadError(
-            error instanceof Error
-              ? `Falha ao conectar ao catálogo: ${error.message}`
-              : "Falha ao conectar ao catálogo."
-          );
+          retryAfter = Date.now() + cacheMilliseconds;
+          setCatalogLoadError(lastSuccessfulFetch
+            ? "Não foi possível atualizar a vitrine. Exibindo a última versão salva; confirme disponibilidade no WhatsApp."
+            : caught instanceof Error ? caught.message : "Não foi possível carregar a vitrine.");
         }
       } finally {
         loading = false;
       }
     };
 
-    void syncFromCloud();
-    const syncWhenVisible = () => {
-      if (document.visibilityState === "visible") void syncFromCloud();
+    const scheduleRefresh = () => {
+      if (cancelled) return;
+      if (timer) clearTimeout(timer);
+      const nextAttempt = Math.max(lastSuccessfulFetch + cacheMilliseconds, retryAfter);
+      const delay = document.visibilityState === "hidden"
+        ? cacheMilliseconds
+        : Math.max(1000, nextAttempt - Date.now());
+      timer = setTimeout(() => { void syncFromCloud().finally(scheduleRefresh); }, delay);
     };
-    const poll = window.setInterval(() => void syncFromCloud(), 60_000);
+    const syncWhenVisible = () => {
+      if (document.visibilityState === "visible") void syncFromCloud().finally(scheduleRefresh);
+    };
+    const handleCacheChange = (event: StorageEvent) => {
+      if (event.key !== publicCatalogStorageKey) return;
+      if (event.newValue) readSavedCatalog();
+      else {
+        lastSuccessfulFetch = 0;
+        retryAfter = 0;
+      }
+      syncWhenVisible();
+    };
+    const handleOwnChange = () => {
+      lastSuccessfulFetch = 0;
+      retryAfter = 0;
+      syncWhenVisible();
+    };
+
+    readSavedCatalog();
+    void syncFromCloud().finally(scheduleRefresh);
     window.addEventListener("focus", syncWhenVisible);
     document.addEventListener("visibilitychange", syncWhenVisible);
-
+    window.addEventListener("storage", handleCacheChange);
+    window.addEventListener(catalogChangedEvent, handleOwnChange);
     return () => {
       cancelled = true;
-      window.clearInterval(poll);
+      controller.abort();
+      if (timer) clearTimeout(timer);
       window.removeEventListener("focus", syncWhenVisible);
       document.removeEventListener("visibilitychange", syncWhenVisible);
+      window.removeEventListener("storage", handleCacheChange);
+      window.removeEventListener(catalogChangedEvent, handleOwnChange);
     };
-  }, [supabase]);
+  }, [cloudCatalogConfigured]);
 
   useEffect(() => {
     const stageTargets: [string, AtmosphereStage][] = [

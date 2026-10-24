@@ -1,6 +1,6 @@
 "use client";
 
-import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowRight,
@@ -10,20 +10,22 @@ import {
   Check,
   Copy,
   CreditCard,
+  ExternalLink,
   Eye,
   Layers,
-  Lock,
   MapPin,
   Menu,
   Minus,
   Navigation,
   PackagePlus,
+  Pause,
+  Play,
   Plus,
   RefreshCw,
   RotateCcw,
-  RotateCw,
   Search,
   Send,
+  ShieldCheck,
   ShoppingBag,
   Smartphone,
   Sparkles,
@@ -34,6 +36,7 @@ import {
   Truck,
   Watch,
   X,
+  Zap,
 } from "lucide-react";
 import {
   buildGoogleMapsEmbedUrl,
@@ -43,12 +46,15 @@ import {
   defaultStoreSettings,
   formatCurrencyBRL,
   getDefaultVariantsForCategory,
+  getFallbackImageForCategory,
+  handleImageErrorFallback,
   initialProducts,
   normalizeProduct,
   normalizeSettings,
   officialLogoPath,
   Product,
   productsStorageKey,
+  sanitizeExternalUrl,
   settingsStorageKey,
   StoreSettings,
 } from "@/lib/catalog";
@@ -61,7 +67,9 @@ import {
   IphoneModelSpec,
 } from "@/lib/iphone-models";
 import { Iphone3DStudio } from "@/app/components/Iphone3DStudio";
+import { Product3DStudio } from "@/app/components/Product3DStudio";
 import { createClient } from "@/lib/supabase";
+import { StoreAtmosphere } from "@/app/components/StoreAtmosphere";
 
 type FulfillmentMode = "Retirar na loja (Ipaussu)" | "Receber por entrega";
 type PaymentPreference = "PIX (À vista)" | "Cartão de crédito" | "Dar aparelho na troca";
@@ -75,15 +83,12 @@ type CustomOrderItem = {
   quantity: number;
 };
 
-const stageAtmosphereMeta: Record<
-  AtmosphereStage,
-  { label: string; href: string }
-> = {
-  hero: { label: "Destaque", href: "#inicio" },
-  vitrine: { label: "Vitrine", href: "#vitrine" },
-  encomenda: { label: "Encomendas", href: "#encomenda" },
-  localizacao: { label: "Localização", href: "#localizacao" },
-};
+type SafeLinkRecoveryState = {
+  label: string;
+  url: string;
+  repaired: boolean;
+  copiedMessage?: string;
+} | null;
 
 function isIphoneOrCellularProduct(p: Product | null | undefined): boolean {
   if (!p) return false;
@@ -114,18 +119,41 @@ function Brand({
   storeName,
   city,
   logoUrl,
+  onSecretTrigger,
 }: {
   storeName: string;
   city: string;
   logoUrl?: string;
+  onSecretTrigger?: () => void;
 }) {
+  const clickTimestampsRef = useRef<number[]>([]);
+
+  const handleBrandClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    if (!onSecretTrigger) return;
+    const now = Date.now();
+    const recent = clickTimestampsRef.current.filter((t) => now - t < 2000);
+    recent.push(now);
+    clickTimestampsRef.current = recent;
+    if (recent.length >= 5) {
+      e.preventDefault();
+      clickTimestampsRef.current = [];
+      onSecretTrigger();
+    }
+  };
+
   return (
-    <a className="brand" href="#inicio" aria-label={`${storeName}, início`}>
+    <a
+      className="brand"
+      href="#inicio"
+      aria-label={`${storeName}, início`}
+      onClick={handleBrandClick}
+    >
       <span className="brand-logo-ring">
         <img
           src={logoUrl || officialLogoPath}
           alt="Logo oficial WPlay Eletrônicos"
           className="brand-logo-img"
+          onError={(e) => handleImageErrorFallback(e, officialLogoPath)}
         />
       </span>
       <span className="brand-name">
@@ -137,20 +165,23 @@ function Brand({
 }
 
 export default function Home() {
+  const router = useRouter();
   const [products, setProducts] = useState<Product[]>(initialProducts);
   const [settings, setSettings] = useState<StoreSettings>(defaultStoreSettings);
   const [category, setCategory] = useState<string>("Tudo");
   const [onlyFeatured, setOnlyFeatured] = useState(false);
   const [query, setQuery] = useState("");
   const [menuOpen, setMenuOpen] = useState(false);
+  const [ambientPaused, setAmbientPaused] = useState(false);
   const [notice, setNotice] = useState("");
+  const [safeLinkRecovery, setSafeLinkRecovery] = useState<SafeLinkRecoveryState>(null);
 
   // Scroll-Driven Atmosphere Stage
   const [atmosphereStage, setAtmosphereStage] = useState<AtmosphereStage>("hero");
 
   // Interactive Hero Stage
   const [activeSlideIdx, setActiveSlideIdx] = useState(0);
-  const [stagePaused, setStagePaused] = useState(false);
+  const [stagePaused, setStagePaused] = useState(true);
   const stageRef = useRef<HTMLDivElement | null>(null);
 
   // Interactive iPhone 13 -> 18 Pro Max Configurator State
@@ -197,6 +228,64 @@ export default function Home() {
     "perfumes-importados": "Árabe",
   });
   const [inspectedProduct, setInspectedProduct] = useState<Product | null>(null);
+
+  // Discrete Owner-Only Admin Route Shortcut (Ctrl+Shift+A or Ctrl+Alt+A)
+  useEffect(() => {
+    const handleOwnerKeydown = (event: KeyboardEvent) => {
+      const target = event.target as HTMLElement | null;
+      const isInput =
+        target &&
+        (target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.tagName === "SELECT" ||
+          target.isContentEditable);
+      if (isInput) return;
+
+      if (
+        event.ctrlKey &&
+        (event.shiftKey || event.altKey) &&
+        event.key.toLocaleLowerCase() === "a"
+      ) {
+        event.preventDefault();
+        router.push("/admin");
+      }
+    };
+    window.addEventListener("keydown", handleOwnerKeydown);
+    return () => window.removeEventListener("keydown", handleOwnerKeydown);
+  }, [router]);
+
+  useEffect(() => {
+    if (!inspectedProduct) return;
+    const previousFocus = document.activeElement as HTMLElement | null;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const panel = document.querySelector<HTMLElement>(".quicklook-sheet");
+    panel?.querySelector<HTMLElement>("button")?.focus();
+    const handleModalKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setInspectedProduct(null);
+      if (event.key !== "Tab" || !panel) return;
+      const controls = [
+        ...panel.querySelectorAll<HTMLElement>(
+          'button:not(:disabled), a[href], input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]'
+        ),
+      ];
+      const firstControl = controls[0];
+      const lastControl = controls[controls.length - 1];
+      if (event.shiftKey && document.activeElement === firstControl) {
+        event.preventDefault();
+        lastControl?.focus();
+      } else if (!event.shiftKey && document.activeElement === lastControl) {
+        event.preventDefault();
+        firstControl?.focus();
+      }
+    };
+    document.addEventListener("keydown", handleModalKey);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      document.removeEventListener("keydown", handleModalKey);
+      previousFocus?.focus();
+    };
+  }, [inspectedProduct]);
 
   // Interactive Order Studio ("Central de Encomendas")
   const [orderQuantities, setOrderQuantities] = useState<Record<string, number>>({
@@ -325,58 +414,35 @@ export default function Home() {
     return () => window.removeEventListener("storage", syncFromLocal);
   }, []);
 
-  // Scroll-Driven Chromatic Atmosphere Engine
   useEffect(() => {
-    let rafId = 0;
-
-    const updateAtmosphereOnScroll = () => {
-      const doc = document.documentElement;
-      const maxScroll = Math.max(1, doc.scrollHeight - window.innerHeight);
-      const ratio = Math.min(1, Math.max(0, window.scrollY / maxScroll));
-
-      // Smoothly shift hue (112 -> 154) and glow coordinates as the visitor scrolls
-      const dynamicHue = (112 + ratio * 42).toFixed(1);
-      const glowX = (18 + Math.sin(ratio * Math.PI) * 64).toFixed(1);
-      const glowY = (12 + ratio * 72).toFixed(1);
-
-      doc.style.setProperty("--scroll-progress", ratio.toFixed(4));
-      doc.style.setProperty("--atmo-hue", dynamicHue);
-      doc.style.setProperty("--glow-x", `${glowX}%`);
-      doc.style.setProperty("--glow-y", `${glowY}%`);
-
-      // Detect which section owns the viewport center
-      const midY = window.innerHeight * 0.42;
-      const locEl = document.getElementById("localizacao");
-      const orderEl = document.getElementById("encomenda");
-      const vitrineEl = document.getElementById("vitrine");
-
-      let nextStage: AtmosphereStage = "hero";
-      if (locEl && locEl.getBoundingClientRect().top <= midY) {
-        nextStage = "localizacao";
-      } else if (orderEl && orderEl.getBoundingClientRect().top <= midY) {
-        nextStage = "encomenda";
-      } else if (vitrineEl && vitrineEl.getBoundingClientRect().top <= midY) {
-        nextStage = "vitrine";
+    const stageTargets: [string, AtmosphereStage][] = [
+      [".hero-stage-wrap", "hero"],
+      ["#vitrine", "vitrine"],
+      ["#encomenda", "encomenda"],
+      ["#localizacao", "localizacao"],
+    ];
+    const stageByElement = new Map<Element, AtmosphereStage>();
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (!entry.isIntersecting) continue;
+          const stage = stageByElement.get(entry.target);
+          if (stage) {
+            document.documentElement.dataset.stage = stage;
+            setAtmosphereStage(stage);
+          }
+        }
+      },
+      { rootMargin: "-12% 0px -58% 0px" }
+    );
+    for (const [selector, stage] of stageTargets) {
+      const element = document.querySelector(selector);
+      if (element) {
+        stageByElement.set(element, stage);
+        observer.observe(element);
       }
-
-      doc.dataset.stage = nextStage;
-      setAtmosphereStage((prev) => (prev === nextStage ? prev : nextStage));
-    };
-
-    const onScroll = () => {
-      cancelAnimationFrame(rafId);
-      rafId = requestAnimationFrame(updateAtmosphereOnScroll);
-    };
-
-    updateAtmosphereOnScroll();
-    window.addEventListener("scroll", onScroll, { passive: true });
-    window.addEventListener("resize", onScroll, { passive: true });
-
-    return () => {
-      cancelAnimationFrame(rafId);
-      window.removeEventListener("scroll", onScroll);
-      window.removeEventListener("resize", onScroll);
-    };
+    }
+    return () => observer.disconnect();
   }, []);
 
   const stageSlides = useMemo(
@@ -389,7 +455,12 @@ export default function Home() {
 
   // Auto-advance Hero Stage when not hovered
   useEffect(() => {
-    if (stagePaused || stageSlides.length <= 1) return;
+    if (
+      stagePaused ||
+      stageSlides.length <= 1 ||
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    )
+      return;
     const timer = window.setInterval(() => {
       setActiveSlideIdx((prev) => (prev + 1) % stageSlides.length);
     }, 4800);
@@ -400,7 +471,7 @@ export default function Home() {
 
   const handleStagePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     const el = stageRef.current;
-    if (!el) return;
+    if (!el || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     const rect = el.getBoundingClientRect();
     const x = ((e.clientX - rect.left) / rect.width) * 100;
     const y = ((e.clientY - rect.top) / rect.height) * 100;
@@ -413,19 +484,11 @@ export default function Home() {
   };
 
   const handleStagePointerLeave = () => {
-    setStagePaused(false);
+    setStagePaused(true);
     const el = stageRef.current;
     if (!el) return;
     el.style.setProperty("--tilt-x", "0deg");
     el.style.setProperty("--tilt-y", "0deg");
-  };
-
-  const handleCardPointerMove = (e: React.PointerEvent<HTMLElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    e.currentTarget.style.setProperty("--card-x", `${x.toFixed(0)}px`);
-    e.currentTarget.style.setProperty("--card-y", `${y.toFixed(0)}px`);
   };
 
   const publishedProducts = useMemo(
@@ -552,15 +615,20 @@ export default function Home() {
 
   const toggleProductInOrder = (productId: string, scrollToBuilder = false) => {
     setCustomMessageOverride(null);
+    const current = orderQuantities[productId] || 0;
+    const targetProduct = publishedProducts.find((p) => p.id === productId);
     setOrderQuantities((prev) => {
-      const current = prev[productId] || 0;
-      if (current > 0) {
+      const curr = prev[productId] || 0;
+      if (curr > 0) {
         const copy = { ...prev };
         delete copy[productId];
         return copy;
       }
       return { ...prev, [productId]: 1 };
     });
+    if (current === 0 && targetProduct) {
+      setNotice(`${targetProduct.name} adicionado ao seu pedido!`);
+    }
     if (scrollToBuilder) {
       document.getElementById("encomenda")?.scrollIntoView({ behavior: "smooth" });
     }
@@ -619,6 +687,28 @@ export default function Home() {
     }
   };
 
+  // Safe External Navigation & Broken-Link Fallback Guard
+  const openSafeExternalLink = async (
+    rawUrl: string | null | undefined,
+    fallbackUrl: string,
+    label: string,
+    copyPayload?: string
+  ) => {
+    const { url, repaired } = sanitizeExternalUrl(rawUrl, fallbackUrl);
+    if (copyPayload) {
+      await handleCopyMessage(copyPayload);
+    }
+    const opened = window.open(url, "_blank", "noopener,noreferrer");
+    if (!opened || repaired) {
+      setSafeLinkRecovery({
+        label,
+        url,
+        repaired,
+        copiedMessage: copyPayload,
+      });
+    }
+  };
+
   const handleSendOrderToWhatsApp = async () => {
     const { href, usesDirectText } = buildWhatsAppHref(settings, activeOrderMessage);
     const copied = await handleCopyMessage(activeOrderMessage);
@@ -629,7 +719,12 @@ export default function Home() {
           : "Abrindo o WhatsApp oficial da WPlay."
       );
     }
-    window.open(href, "_blank", "noopener,noreferrer");
+    await openSafeExternalLink(
+      href,
+      defaultStoreSettings.whatsapp_url,
+      "WhatsApp Oficial WPlay",
+      activeOrderMessage
+    );
   };
 
   const handleQuickProductConsult = async (product: Product) => {
@@ -640,9 +735,9 @@ export default function Home() {
         getDefaultVariantsForCategory(product.category)[0];
     const priceLabel = formatCurrencyBRL(product.price);
     const meta = [variant, priceLabel].filter(Boolean).join(" · ");
-    const quickText = `Olá, WPlay! Quero consultar: ${product.name}${
+    const quickText = `Olá, WPlay! Quero comprar/consultar: ${product.name}${
       meta ? ` (${meta})` : ""
-    }. Está disponível?`;
+    }. Está disponível para retirada ou entrega?`;
     const { href, usesDirectText } = buildWhatsAppHref(settings, quickText);
     if (!usesDirectText) {
       const copied = await handleCopyMessage(quickText);
@@ -650,30 +745,39 @@ export default function Home() {
         setNotice(`"${meta || product.name}" copiado! Cole no WhatsApp.`);
       }
     }
-    window.open(href, "_blank", "noopener,noreferrer");
+    await openSafeExternalLink(
+      href,
+      defaultStoreSettings.whatsapp_url,
+      `Comprar ${product.name}`,
+      quickText
+    );
   };
 
-  const primaryWhatsAppHref = settings.whatsapp_url || defaultStoreSettings.whatsapp_url;
-  const mapsHref = settings.maps_url || defaultStoreSettings.maps_url;
+  const handleTopBarBuyClick = () => {
+    setMenuOpen(false);
+    if (totalOrderCount === 0 && activeSlide) {
+      const targetId = activeSlide.id || "iphone-pro";
+      setOrderQuantities({ [targetId]: 1 });
+      setNotice(`Adicionamos ${activeSlide.title} ao seu pedido para agilizar!`);
+    }
+    document.getElementById("encomenda")?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  const primaryWhatsAppHref = buildWhatsAppHref(settings).href;
+  const safeInstagramUrl = sanitizeExternalUrl(
+    settings.instagram_url,
+    defaultStoreSettings.instagram_url
+  ).url;
+  const mapsHref = sanitizeExternalUrl(
+    settings.maps_url,
+    defaultStoreSettings.maps_url
+  ).url;
   const mapsEmbedUrl = buildGoogleMapsEmbedUrl(settings);
   const activeLogoUrl = settings.logo_url || officialLogoPath;
 
-  const currentGenerationModels = useMemo(
-    () => iphoneLineup.filter((m) => m.generation === activeIphoneGen),
-    [activeIphoneGen]
-  );
-
   return (
-    <main id="inicio" data-stage={atmosphereStage}>
-      {/* Fixed Scroll-Driven Chromatic Atmosphere Canvas */}
-      <div className="chromatic-backdrop" aria-hidden="true">
-        <div className="chromatic-orb chromatic-orb-primary" />
-        <div className="chromatic-orb chromatic-orb-secondary" />
-        <div className="chromatic-mesh" />
-      </div>
-
-      {/* Top Scroll Gradient Progress Ribbon */}
-      <div className="scroll-spectrum-bar" aria-hidden="true" />
+    <main id="inicio" className="storefront-clean" data-stage={atmosphereStage}>
+      <StoreAtmosphere paused={ambientPaused} />
 
       <header className="header">
         <Brand
@@ -718,83 +822,82 @@ export default function Home() {
             Localização
           </a>
           <a
-            href={settings.instagram_url}
+            href={safeInstagramUrl}
             target="_blank"
-            rel="noreferrer"
-            onClick={() => setMenuOpen(false)}
+            rel="noopener noreferrer"
+            onClick={(e) => {
+              e.preventDefault();
+              setMenuOpen(false);
+              void openSafeExternalLink(
+                settings.instagram_url,
+                defaultStoreSettings.instagram_url,
+                "Instagram WPlay"
+              );
+            }}
           >
             Instagram <ArrowUpRight size={13} />
           </a>
-          <Link
-            href="/admin"
-            className="admin-trigger"
-            onClick={() => setMenuOpen(false)}
-          >
-            <Lock size={13} /> Painel Admin <ArrowUpRight size={13} />
-          </Link>
         </nav>
 
-        <a
-          className="header-cta"
-          href={primaryWhatsAppHref}
-          target="_blank"
-          rel="noreferrer"
-        >
-          WhatsApp <ArrowUpRight size={15} />
-        </a>
+        <div className="header-action-group">
+          <button
+            type="button"
+            className="ambient-toggle"
+            aria-pressed={ambientPaused}
+            aria-label={
+              ambientPaused ? "Ativar iluminação dinâmica" : "Pausar iluminação dinâmica"
+            }
+            title={
+              ambientPaused ? "Ativar iluminação dinâmica" : "Pausar iluminação dinâmica"
+            }
+            onClick={() => setAmbientPaused((previous) => !previous)}
+          >
+            {ambientPaused ? <Play size={14} /> : <Pause size={14} />}
+          </button>
+
+          <button
+            type="button"
+            className={`header-buy-cta ${totalOrderCount > 0 ? "has-items" : ""}`}
+            onClick={handleTopBarBuyClick}
+            aria-label={
+              totalOrderCount > 0
+                ? `Comprar agora (${totalOrderCount} ${
+                    totalOrderCount === 1 ? "item selecionado" : "itens selecionados"
+                  })`
+                : "Comprar agora"
+            }
+          >
+            <ShoppingBag size={15} />
+            <span>{totalOrderCount > 0 ? "Comprar agora" : "Comprar"}</span>
+            {totalOrderCount > 0 && (
+              <span className="header-buy-badge">{totalOrderCount}</span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            className="header-quick-whatsapp"
+            onClick={() => void handleSendOrderToWhatsApp()}
+            title="Finalizar pedido em 1 clique pelo WhatsApp"
+          >
+            <Zap size={14} />
+            <span>1-Clique</span>
+          </button>
+        </div>
       </header>
 
       {/* Interactive Split Stage Hero */}
       <section className="hero-stage-wrap">
         <div className="hero-left">
-          <div className="hero-brand-pill">
-            <img
-              src={activeLogoUrl}
-              alt="Logo WPlay Eletrônicos"
-              className="hero-brand-logo"
-            />
-            <div>
-              <strong>{settings.store_name}</strong>
-              <a href="#localizacao" className="hero-address-chip">
-                <MapPin size={12} /> {settings.address_line} · {settings.city}
-              </a>
-            </div>
-          </div>
-
           <h1>
             Toque, escolha
-            <br />e chame no <span>WhatsApp.</span>
+            <br />e compre pelo <span>WhatsApp.</span>
           </h1>
 
-          <div
-            className="stage-switcher"
-            role="tablist"
-            aria-label="Explorar linhas de produtos em destaque"
-          >
-            {stageSlides.map((slide, idx) => {
-              const active = idx === activeSlideIdx;
-              return (
-                <button
-                  key={slide.id}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  className={active ? "stage-pill active" : "stage-pill"}
-                  onMouseEnter={() => {
-                    setStagePaused(true);
-                    setActiveSlideIdx(idx);
-                  }}
-                  onClick={() => {
-                    setActiveSlideIdx(idx);
-                  }}
-                >
-                  <span className="stage-pill-tag">{slide.tag}</span>
-                  <strong>{slide.title}</strong>
-                  <ArrowRight size={15} />
-                </button>
-              );
-            })}
-          </div>
+          <p className="hero-summary">
+            iPhones do 13 ao 18 Pro Max, Scooters Elétricas, Perfumes e Áudio em
+            Ipaussu. Atendimento direto, sem fila e com avaliação imediata na troca.
+          </p>
 
           <div className="hero-actions">
             <button
@@ -805,14 +908,27 @@ export default function Home() {
                 document.getElementById("vitrine")?.scrollIntoView({ behavior: "smooth" });
               }}
             >
-              Ver {activeSlide.tag} <ArrowRight size={16} />
+              Explorar {activeSlide.tag} <ArrowRight size={16} />
             </button>
-            <a className="button button-outline" href="#encomenda">
-              <ShoppingBag size={16} /> Fazer Encomenda
-            </a>
-            <a className="button button-outline" href="#localizacao">
-              <MapPin size={16} /> Como chegar
-            </a>
+            <button
+              type="button"
+              className="button button-outline"
+              onClick={handleTopBarBuyClick}
+            >
+              <ShoppingBag size={16} /> Comprar / Encomendar
+            </button>
+          </div>
+
+          <div className="hero-trust-strip" aria-label="Vantagens exclusivas WPlay">
+            <span className="trust-pill">
+              <ShieldCheck size={14} /> Retirada hoje em Ipaussu
+            </span>
+            <span className="trust-pill">
+              <RefreshCw size={14} /> Seu usado vale na troca
+            </span>
+            <span className="trust-pill">
+              <Sparkles size={14} /> Condição especial no PIX
+            </span>
           </div>
         </div>
 
@@ -828,6 +944,9 @@ export default function Home() {
               key={slide.id}
               src={slide.image}
               alt={slide.title}
+              onError={(e) =>
+                handleImageErrorFallback(e, getFallbackImageForCategory(slide.category))
+              }
               className={
                 idx === activeSlideIdx
                   ? "hero-viewport-img active"
@@ -864,7 +983,7 @@ export default function Home() {
                     if (!orderQuantities[activeSlide.id]) {
                       toggleProductInOrder(activeSlide.id, false);
                     }
-                    setNotice(`${activeSlide.title} (${spec}) adicionado à encomenda.`);
+                    setNotice(`${activeSlide.title} (${spec}) adicionado ao pedido.`);
                   }}
                 >
                   <Plus size={12} /> {spec}
@@ -880,9 +999,9 @@ export default function Home() {
                   publishedProducts[0];
                 if (found) setInspectedProduct(found);
               }}
-              aria-label={`Espiar ${activeSlide.title}`}
+              aria-label={`Espiar ${activeSlide.title} em 3D`}
             >
-              <Eye size={16} /> Espiar
+              <Eye size={16} /> Espiar 3D
             </button>
           </div>
         </div>
@@ -941,7 +1060,7 @@ export default function Home() {
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Buscar iPhone 13 ao 18 Pro Max, scooter..."
+                placeholder="Buscar iPhone 16 Pro Max, Scooter, Perfume..."
                 aria-label="Buscar produtos"
               />
               {query && (
@@ -957,154 +1076,9 @@ export default function Home() {
           </div>
         </div>
 
-        {/* Dedicated iPhone 13 -> 18 Pro Max Interactive Selector Banner when viewing Celulares or Tudo */}
-        {(category === "Celulares" || category === "Tudo") && !onlyFeatured && !query && (
-          <div className="iphone-lineup-showcase">
-            <div className="iphone-lineup-header">
-              <div>
-                <span className="iphone-lineup-kicker">
-                  <Smartphone size={14} /> LINHA COMPLETA APPLE · DO 13 AO 18 PRO MAX
-                </span>
-                <h3>
-                  Escolha o modelo, a <span>memória compatível</span> e gire em 3D
-                </h3>
-              </div>
-
-              <button
-                type="button"
-                className="button button-lime"
-                onClick={() => {
-                  const iphoneProd =
-                    publishedProducts.find((p) => isIphoneOrCellularProduct(p)) ||
-                    publishedProducts[0];
-                  if (iphoneProd) setInspectedProduct(iphoneProd);
-                }}
-              >
-                <RotateCw size={15} /> Abrir Estúdio 3D (Espiar Todos)
-              </button>
-            </div>
-
-            {/* Generation Tabs: 13 | 14 | 15 | 16 | 17 | 18 */}
-            <div className="iphone-gen-tabs" role="tablist" aria-label="Gerações de iPhone">
-              {iphoneGenerations.map((gen) => (
-                <button
-                  key={gen}
-                  type="button"
-                  role="tab"
-                  aria-selected={activeIphoneGen === gen}
-                  className={
-                    activeIphoneGen === gen ? "iphone-gen-tab active" : "iphone-gen-tab"
-                  }
-                  onClick={() => {
-                    setActiveIphoneGen(gen);
-                    const firstInGen =
-                      iphoneLineup.find(
-                        (m) => m.generation === gen && m.tier === "promax"
-                      ) || iphoneLineup.find((m) => m.generation === gen);
-                    if (firstInGen) {
-                      applyIphoneConfiguration(firstInGen);
-                    }
-                  }}
-                >
-                  <span>Linha</span>
-                  <strong>iPhone {gen}</strong>
-                </button>
-              ))}
-            </div>
-
-            {/* Models within selected Generation + Compatible Storages & Finishes */}
-            <div className="iphone-config-bar">
-              <div className="iphone-config-col">
-                <span className="config-col-label">
-                  1. Modelo da Linha iPhone {activeIphoneGen}
-                </span>
-                <div className="iphone-model-pills">
-                  {currentGenerationModels.map((m) => {
-                    const active = m.id === activeIphoneModel.id;
-                    return (
-                      <button
-                        key={m.id}
-                        type="button"
-                        className={active ? "iphone-model-pill active" : "iphone-model-pill"}
-                        onClick={() => applyIphoneConfiguration(m)}
-                      >
-                        <strong>{m.name}</strong>
-                        <small>{m.displaySize}</small>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="iphone-config-col">
-                <span className="config-col-label">
-                  2. Memória Compatível ({activeIphoneModel.name})
-                </span>
-                <div className="iphone-storage-pills">
-                  {activeIphoneModel.storages.map((cap) => {
-                    const active = cap === activeIphoneStorage;
-                    return (
-                      <button
-                        key={cap}
-                        type="button"
-                        className={
-                          active ? "iphone-storage-pill active" : "iphone-storage-pill"
-                        }
-                        onClick={() =>
-                          applyIphoneConfiguration(
-                            activeIphoneModel,
-                            cap,
-                            activeIphoneFinish
-                          )
-                        }
-                      >
-                        {cap}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
-              <div className="iphone-config-col">
-                <span className="config-col-label">
-                  3. Acabamento ({activeIphoneFinish.name})
-                </span>
-                <div className="iphone-finish-pills">
-                  {activeIphoneModel.finishes.map((fin) => {
-                    const active = fin.id === activeIphoneFinish.id;
-                    return (
-                      <button
-                        key={fin.id}
-                        type="button"
-                        className={
-                          active ? "iphone-finish-chip active" : "iphone-finish-chip"
-                        }
-                        onClick={() =>
-                          applyIphoneConfiguration(
-                            activeIphoneModel,
-                            activeIphoneStorage,
-                            fin
-                          )
-                        }
-                        title={fin.name}
-                      >
-                        <span
-                          className="finish-swatch-dot"
-                          style={{ background: fin.bodyHex }}
-                        />
-                        <span>{fin.name}</span>
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
         {visibleProducts.length ? (
           <div className="bento-grid">
-            {visibleProducts.map((product, index) => {
+            {visibleProducts.map((product) => {
               const isSelected = (orderQuantities[product.id] || 0) > 0;
               const priceFormatted = formatCurrencyBRL(product.price);
               const isCellular = isIphoneOrCellularProduct(product);
@@ -1115,15 +1089,12 @@ export default function Home() {
               const activeVariant = isCellular
                 ? chosenVariants[product.id] || activeIphoneSummary
                 : chosenVariants[product.id] || variants[0];
-              const isWide = index === 0 && category === "Tudo" && !query && !onlyFeatured;
 
               return (
                 <article
                   key={product.id}
-                  onPointerMove={handleCardPointerMove}
                   className={[
                     "product-card",
-                    isWide ? "product-card-wide" : "",
                     isSelected ? "product-card-selected" : "",
                   ]
                     .filter(Boolean)
@@ -1131,9 +1102,15 @@ export default function Home() {
                 >
                   <div className="product-media">
                     <img
-                      src={product.image || "/images/wplay-iphone.jpg"}
+                      src={product.image || getFallbackImageForCategory(product.category)}
                       alt={product.name}
                       loading="lazy"
+                      onError={(e) =>
+                        handleImageErrorFallback(
+                          e,
+                          getFallbackImageForCategory(product.category)
+                        )
+                      }
                       style={{
                         objectFit: product.imageFit || "cover",
                         objectPosition: product.imagePosition || "50% 50%",
@@ -1144,27 +1121,16 @@ export default function Home() {
                       }}
                       onClick={() => setInspectedProduct(product)}
                     />
-                    <div className="product-top-bar">
-                      <span className="product-tag">{product.category}</span>
-                      {product.badge && (
-                        <span className="product-subtag">{product.badge}</span>
-                      )}
-                    </div>
-
                     <div className="product-quick-Floating">
                       <button
                         type="button"
                         className="icon-pill icon-pill-inspect"
                         onClick={() => setInspectedProduct(product)}
-                        aria-label={`Espiar ${product.name}`}
-                        title={
-                          isCellular
-                            ? "Espiar e girar em 3D (13 ao 18 Pro Max)"
-                            : "Espiar detalhes"
-                        }
+                        aria-label={`Espiar ${product.name} em 3D`}
+                        title="Espiar e girar em 3D (360°)"
                       >
                         <Eye size={16} />
-                        {isCellular && <span className="pill-3d-label">Espiar 3D</span>}
+                        <span className="pill-3d-label">Espiar 3D</span>
                       </button>
                       <button
                         type="button"
@@ -1174,10 +1140,10 @@ export default function Home() {
                         onClick={() => toggleProductInOrder(product.id, false)}
                         aria-label={
                           isSelected
-                            ? `Remover ${product.name} da encomenda`
-                            : `Adicionar ${product.name} à encomenda`
+                            ? `Remover ${product.name} do pedido`
+                            : `Adicionar ${product.name} ao pedido`
                         }
-                        title={isSelected ? "Na encomenda" : "Adicionar à encomenda"}
+                        title={isSelected ? "No pedido" : "Incluir no pedido"}
                       >
                         {isSelected ? <Check size={17} /> : <Plus size={17} />}
                       </button>
@@ -1190,90 +1156,25 @@ export default function Home() {
                       {priceFormatted ? (
                         <strong className="price-badge">{priceFormatted}</strong>
                       ) : (
-                        <span className="consult-badge">
-                          {isCellular ? activeIphoneModel.name : "Consultar"}
-                        </span>
+                        <span className="consult-badge">Sob consulta</span>
                       )}
                     </div>
 
-                    {isCellular ? (
-                      <div className="cellular-card-config">
-                        <div className="cellular-quick-models" role="group" aria-label="Escolher modelo iPhone 13 ao 18 Pro Max">
-                          {[
-                            "iphone-13",
-                            "iphone-14-pro-max",
-                            "iphone-15-pro-max",
-                            "iphone-16-pro-max",
-                            "iphone-17-pro-max",
-                            "iphone-18-pro-max",
-                          ].map((mId) => {
-                            const mSpec = getIphoneModelById(mId);
-                            const chosen = activeIphoneModel.id === mSpec.id;
-                            return (
-                              <button
-                                key={mSpec.id}
-                                type="button"
-                                className={chosen ? "variant-chip active" : "variant-chip"}
-                                onClick={() => applyIphoneConfiguration(mSpec)}
-                              >
-                                {mSpec.name}
-                              </button>
-                            );
-                          })}
-                        </div>
+                    <p className="product-summary">
+                      {isCellular
+                        ? `${activeIphoneModel.name} · ${activeIphoneStorage}`
+                        : `${product.category} · ${activeVariant}`}
+                    </p>
 
-                        <div className="cellular-quick-storages">
-                          <span className="cellular-storage-tag">Memória compatível:</span>
-                          {activeIphoneModel.storages.map((cap) => (
-                            <button
-                              key={cap}
-                              type="button"
-                              className={
-                                activeIphoneStorage === cap
-                                  ? "storage-mini-chip active"
-                                  : "storage-mini-chip"
-                              }
-                              onClick={() =>
-                                applyIphoneConfiguration(
-                                  activeIphoneModel,
-                                  cap,
-                                  activeIphoneFinish
-                                )
-                              }
-                            >
-                              {cap}
-                            </button>
-                          ))}
-                          <button
-                            type="button"
-                            className="storage-3d-trigger"
-                            onClick={() => setInspectedProduct(product)}
-                          >
-                            <RotateCw size={12} /> Ver todos (13 ao 18 Pro Max) em 3D
-                          </button>
-                        </div>
-                      </div>
-                    ) : (
-                      <div
-                        className="variant-row"
-                        role="group"
-                        aria-label={`Opções para ${product.name}`}
-                      >
-                        {variants.map((v) => {
-                          const chosen = activeVariant === v;
-                          return (
-                            <button
-                              key={v}
-                              type="button"
-                              className={chosen ? "variant-chip active" : "variant-chip"}
-                              onClick={() => selectVariant(product.id, v)}
-                            >
-                              {v}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    )}
+                    <div className="product-hook-row">
+                      <span className="hook-chip hook-chip-emerald">
+                        <ShieldCheck size={11} />
+                        {isCellular ? "Linha 13 ao 18 Pro Max" : "Pronta consulta · Ipaussu"}
+                      </span>
+                      <span className="hook-chip hook-chip-lime">
+                        <Zap size={11} /> PIX ou Troca Smart
+                      </span>
+                    </div>
 
                     <div className="product-footer">
                       <button
@@ -1285,11 +1186,11 @@ export default function Home() {
                       >
                         {isSelected ? (
                           <>
-                            <Check size={14} /> Na bandeja ({orderQuantities[product.id]})
+                            <Check size={14} /> No pedido ({orderQuantities[product.id]})
                           </>
                         ) : (
                           <>
-                            <Plus size={14} /> Encomendar
+                            <ShoppingBag size={14} /> Selecionar
                           </>
                         )}
                       </button>
@@ -1298,12 +1199,9 @@ export default function Home() {
                         type="button"
                         className="card-whatsapp-btn"
                         onClick={() => void handleQuickProductConsult(product)}
-                        aria-label={`Cotar ${product.name} (${activeVariant}) no WhatsApp`}
+                        aria-label={`Comprar ${product.name} (${activeVariant}) pelo WhatsApp`}
                       >
-                        Cotar{" "}
-                        {isCellular
-                          ? `${activeIphoneModel.shortName} ${activeIphoneStorage}`
-                          : activeVariant}{" "}
+                        Comprar já
                         <ArrowUpRight size={15} />
                       </button>
                     </div>
@@ -1335,10 +1233,10 @@ export default function Home() {
         <div className="order-studio-header">
           <div>
             <h2>
-              Monte sua encomenda <span>sob medida.</span>
+              Finalize seu <span>pedido.</span>
             </h2>
             <p className="order-studio-sub">
-              Selecione itens da vitrine, peça qualquer modelo sob encomenda e escolha como prefere pagar e retirar.
+              Personalize modelos, escolha retirada em Ipaussu ou entrega rápida e finalize no WhatsApp.
             </p>
           </div>
 
@@ -1392,18 +1290,18 @@ export default function Home() {
                   >
                     <div className="order-select-top">
                       <img
-                        src={p.image}
+                        src={p.image || getFallbackImageForCategory(p.category)}
                         alt={p.name}
                         className="order-select-thumb"
+                        onError={(e) =>
+                          handleImageErrorFallback(
+                            e,
+                            getFallbackImageForCategory(p.category)
+                          )
+                        }
                       />
                       <div className="order-select-info">
-                        <span className="order-select-cat">{p.category}</span>
                         <strong>{p.name}</strong>
-                        <small>
-                          {isCellular
-                            ? activeIphoneSummary
-                            : formatCurrencyBRL(p.price) || p.badge || "Sob consulta"}
-                        </small>
                       </div>
 
                       {active ? (
@@ -1436,67 +1334,18 @@ export default function Home() {
                     </div>
 
                     <div className="order-select-variants">
-                      {isCellular ? (
-                        <>
-                          {[
-                            "iphone-13",
-                            "iphone-14-pro-max",
-                            "iphone-15-pro-max",
-                            "iphone-16-pro-max",
-                            "iphone-17-pro-max",
-                            "iphone-18-pro-max",
-                          ].map((mId) => {
-                            const mSpec = getIphoneModelById(mId);
-                            const isModelActive = activeIphoneModel.id === mSpec.id;
-                            return (
-                              <button
-                                key={mSpec.id}
-                                type="button"
-                                className={
-                                  isModelActive
-                                    ? "order-mini-variant active"
-                                    : "order-mini-variant"
-                                }
-                                onClick={() => {
-                                  applyIphoneConfiguration(mSpec);
-                                  if (!orderQuantities[p.id]) {
-                                    adjustProductQuantity(p.id, 1);
-                                  }
-                                }}
-                              >
-                                {mSpec.shortName} ({mSpec.storages[0]})
-                              </button>
-                            );
-                          })}
-                          <button
-                            type="button"
-                            className="order-mini-variant"
-                            onClick={() => setInspectedProduct(p)}
-                          >
-                            <RotateCw size={11} /> Girar 3D / Outra Memória
-                          </button>
-                        </>
-                      ) : (
-                        variants.map((v) => (
-                          <button
-                            key={v}
-                            type="button"
-                            className={
-                              chosenVar === v
-                                ? "order-mini-variant active"
-                                : "order-mini-variant"
-                            }
-                            onClick={() => {
-                              selectVariant(p.id, v);
-                              if (!orderQuantities[p.id]) {
-                                adjustProductQuantity(p.id, 1);
-                              }
-                            }}
-                          >
-                            {v}
-                          </button>
-                        ))
-                      )}
+                      <button
+                        type="button"
+                        className="order-configure"
+                        onClick={() => setInspectedProduct(p)}
+                      >
+                        {isCellular
+                          ? `${activeIphoneModel.name} · ${activeIphoneStorage} · ${activeIphoneFinish.name}`
+                          : chosenVar}
+                        <span>
+                          Configurar 3D <ArrowUpRight size={13} />
+                        </span>
+                      </button>
                     </div>
                   </div>
                 );
@@ -1504,168 +1353,176 @@ export default function Home() {
             </div>
 
             {/* 2. Custom Special-Order Adder */}
-            <form
-              className="custom-order-adder"
-              onSubmit={(e) => handleAddCustomOrderItem(e)}
-            >
-              <div className="custom-adder-head">
-                <PackagePlus size={18} />
-                <div>
-                  <strong>Procurando um modelo específico fora da vitrine?</strong>
-                  <span>
-                    Digite o aparelho, capacidade, perfume ou acessório que buscamos para você
-                  </span>
-                </div>
-              </div>
-
-              <div className="custom-adder-controls">
-                <input
-                  type="text"
-                  maxLength={90}
-                  placeholder="Ex.: iPhone 18 Pro Max 1TB Titânio Jade, Perfume Asad, PS5..."
-                  value={customDraftTitle}
-                  onChange={(e) => setCustomDraftTitle(e.target.value)}
-                />
-                <div className="custom-condition-pills">
-                  {(["Lacrado", "Seminovo", "Original Importado"] as CustomCondition[]).map(
-                    (cond) => (
-                      <button
-                        key={cond}
-                        type="button"
-                        className={
-                          customDraftCondition === cond
-                            ? "condition-pill active"
-                            : "condition-pill"
-                        }
-                        onClick={() => setCustomDraftCondition(cond)}
-                      >
-                        {cond}
-                      </button>
-                    )
-                  )}
-                </div>
-                <button type="submit" className="button button-lime">
-                  <Plus size={15} /> Adicionar à Bandeja
-                </button>
-              </div>
-            </form>
-
-            {/* 3. Fulfillment & Payment Configurator */}
-            <div className="order-preferences-grid">
-              <div className="order-pref-box">
-                <span className="pref-label">Como prefere receber?</span>
-                <div className="pref-options">
-                  <button
-                    type="button"
-                    className={
-                      fulfillment === "Retirar na loja (Ipaussu)"
-                        ? "pref-btn active"
-                        : "pref-btn"
-                    }
-                    onClick={() => {
-                      setCustomMessageOverride(null);
-                      setFulfillment("Retirar na loja (Ipaussu)");
-                    }}
-                  >
-                    <Store size={16} />
-                    <div>
-                      <strong>Retirar na Loja</strong>
-                      <small>{settings.address_line}</small>
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    className={
-                      fulfillment === "Receber por entrega"
-                        ? "pref-btn active"
-                        : "pref-btn"
-                    }
-                    onClick={() => {
-                      setCustomMessageOverride(null);
-                      setFulfillment("Receber por entrega");
-                    }}
-                  >
-                    <Truck size={16} />
-                    <div>
-                      <strong>Receber por Entrega</strong>
-                      <small>Ipaussu e região</small>
-                    </div>
-                  </button>
-                </div>
-              </div>
-
-              <div className="order-pref-box">
-                <span className="pref-label">Preferência de pagamento ou troca</span>
-                <div className="pref-options pref-options-3">
-                  <button
-                    type="button"
-                    className={
-                      paymentPref === "PIX (À vista)" ? "pref-btn active" : "pref-btn"
-                    }
-                    onClick={() => {
-                      setCustomMessageOverride(null);
-                      setPaymentPref("PIX (À vista)");
-                    }}
-                  >
-                    <Sparkles size={15} />
-                    <div>
-                      <strong>PIX</strong>
-                      <small>Melhor condição</small>
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    className={
-                      paymentPref === "Cartão de crédito" ? "pref-btn active" : "pref-btn"
-                    }
-                    onClick={() => {
-                      setCustomMessageOverride(null);
-                      setPaymentPref("Cartão de crédito");
-                    }}
-                  >
-                    <CreditCard size={15} />
-                    <div>
-                      <strong>Cartão</strong>
-                      <small>Simular parcelas</small>
-                    </div>
-                  </button>
-
-                  <button
-                    type="button"
-                    className={
-                      paymentPref === "Dar aparelho na troca"
-                        ? "pref-btn active"
-                        : "pref-btn"
-                    }
-                    onClick={() => {
-                      setCustomMessageOverride(null);
-                      setPaymentPref("Dar aparelho na troca");
-                    }}
-                  >
-                    <RefreshCw size={15} />
-                    <div>
-                      <strong>Troca</strong>
-                      <small>Seu usado como parte</small>
-                    </div>
-                  </button>
+            <details className="order-optional">
+              <summary>
+                Procurando outro modelo específico? <Plus size={15} />
+              </summary>
+              <form
+                className="custom-order-adder"
+                onSubmit={(e) => handleAddCustomOrderItem(e)}
+              >
+                <div className="custom-adder-head">
+                  <PackagePlus size={18} />
+                  <div>
+                    <strong>Encomenda sob medida</strong>
+                    <span>Digite qualquer produto ou capacidade desejada.</span>
+                  </div>
                 </div>
 
-                {paymentPref === "Dar aparelho na troca" && (
+                <div className="custom-adder-controls">
                   <input
                     type="text"
-                    className="tradein-input"
-                    placeholder="Qual aparelho você quer dar na troca? (Ex.: iPhone 13 128GB, saúde 88%)"
-                    value={tradeInDevice}
-                    onChange={(e) => {
-                      setCustomMessageOverride(null);
-                      setTradeInDevice(e.target.value);
-                    }}
+                    maxLength={90}
+                    placeholder="Ex.: iPhone 17 Pro 512GB, Apple Watch, JBL Boombox..."
+                    value={customDraftTitle}
+                    onChange={(e) => setCustomDraftTitle(e.target.value)}
                   />
-                )}
+                  <div className="custom-condition-pills">
+                    {(["Lacrado", "Seminovo", "Original Importado"] as CustomCondition[]).map(
+                      (cond) => (
+                        <button
+                          key={cond}
+                          type="button"
+                          className={
+                            customDraftCondition === cond
+                              ? "condition-pill active"
+                              : "condition-pill"
+                          }
+                          onClick={() => setCustomDraftCondition(cond)}
+                        >
+                          {cond}
+                        </button>
+                      )
+                    )}
+                  </div>
+                  <button type="submit" className="button button-lime">
+                    <Plus size={15} /> Incluir no Pedido
+                  </button>
+                </div>
+              </form>
+            </details>
+
+            {/* 3. Fulfillment & Payment Configurator */}
+            <details className="order-optional" open>
+              <summary>
+                Entrega, PIX ou Troca Smart <ArrowRight size={15} />
+              </summary>
+              <div className="order-preferences-grid">
+                <div className="order-pref-box">
+                  <span className="pref-label">Como prefere receber?</span>
+                  <div className="pref-options">
+                    <button
+                      type="button"
+                      className={
+                        fulfillment === "Retirar na loja (Ipaussu)"
+                          ? "pref-btn active"
+                          : "pref-btn"
+                      }
+                      onClick={() => {
+                        setCustomMessageOverride(null);
+                        setFulfillment("Retirar na loja (Ipaussu)");
+                      }}
+                    >
+                      <Store size={16} />
+                      <div>
+                        <strong>Retirar na Loja</strong>
+                        <small>{settings.address_line}</small>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      className={
+                        fulfillment === "Receber por entrega"
+                          ? "pref-btn active"
+                          : "pref-btn"
+                      }
+                      onClick={() => {
+                        setCustomMessageOverride(null);
+                        setFulfillment("Receber por entrega");
+                      }}
+                    >
+                      <Truck size={16} />
+                      <div>
+                        <strong>Receber por Entrega</strong>
+                        <small>Ipaussu e região</small>
+                      </div>
+                    </button>
+                  </div>
+                </div>
+
+                <div className="order-pref-box">
+                  <span className="pref-label">Preferência de pagamento ou troca</span>
+                  <div className="pref-options pref-options-3">
+                    <button
+                      type="button"
+                      className={
+                        paymentPref === "PIX (À vista)" ? "pref-btn active" : "pref-btn"
+                      }
+                      onClick={() => {
+                        setCustomMessageOverride(null);
+                        setPaymentPref("PIX (À vista)");
+                      }}
+                    >
+                      <Sparkles size={15} />
+                      <div>
+                        <strong>PIX</strong>
+                        <small>Melhor condição</small>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      className={
+                        paymentPref === "Cartão de crédito" ? "pref-btn active" : "pref-btn"
+                      }
+                      onClick={() => {
+                        setCustomMessageOverride(null);
+                        setPaymentPref("Cartão de crédito");
+                      }}
+                    >
+                      <CreditCard size={15} />
+                      <div>
+                        <strong>Cartão</strong>
+                        <small>Simular parcelas</small>
+                      </div>
+                    </button>
+
+                    <button
+                      type="button"
+                      className={
+                        paymentPref === "Dar aparelho na troca"
+                          ? "pref-btn active"
+                          : "pref-btn"
+                      }
+                      onClick={() => {
+                        setCustomMessageOverride(null);
+                        setPaymentPref("Dar aparelho na troca");
+                      }}
+                    >
+                      <RefreshCw size={15} />
+                      <div>
+                        <strong>Troca Smart</strong>
+                        <small>Seu usado como parte</small>
+                      </div>
+                    </button>
+                  </div>
+
+                  {paymentPref === "Dar aparelho na troca" && (
+                    <input
+                      type="text"
+                      className="tradein-input"
+                      placeholder="Qual aparelho você quer dar na troca? (Ex.: iPhone 13 128GB, saúde 88%)"
+                      value={tradeInDevice}
+                      onChange={(e) => {
+                        setCustomMessageOverride(null);
+                        setTradeInDevice(e.target.value);
+                      }}
+                    />
+                  )}
+                </div>
               </div>
-            </div>
+            </details>
           </div>
 
           {/* Right Column: Live Interactive Order Tray & WhatsApp Dispatch */}
@@ -1676,9 +1533,10 @@ export default function Home() {
                   src={activeLogoUrl}
                   alt="Logo WPlay"
                   className="tray-brand-logo"
+                  onError={(e) => handleImageErrorFallback(e, officialLogoPath)}
                 />
                 <div>
-                  <strong>Bandeja de Encomenda</strong>
+                  <strong>Resumo do Pedido</strong>
                   <span>
                     {settings.store_name} · {settings.city}
                   </span>
@@ -1695,14 +1553,23 @@ export default function Home() {
                 <div className="tray-empty">
                   <ShoppingBag size={20} />
                   <p>
-                    Toque em <strong>+ Incluir</strong> nos produtos ao lado ou adicione um pedido sob encomenda.
+                    Toque em <strong>+ Incluir</strong> nos produtos ao lado para montar seu pedido.
                   </p>
                 </div>
               ) : (
                 <>
                   {selectedCatalogEntries.map(({ product, quantity, variant }) => (
                     <div className="tray-item-row" key={product.id}>
-                      <img src={product.image} alt={product.name} />
+                      <img
+                        src={product.image || getFallbackImageForCategory(product.category)}
+                        alt={product.name}
+                        onError={(e) =>
+                          handleImageErrorFallback(
+                            e,
+                            getFallbackImageForCategory(product.category)
+                          )
+                        }
+                      />
                       <div className="tray-item-meta">
                         <strong>{product.name}</strong>
                         <span>{variant}</span>
@@ -1782,7 +1649,10 @@ export default function Home() {
             </div>
 
             {/* Live Message Preview / Editor Toggle */}
-            <div className="tray-message-box">
+            <details className="tray-message-box">
+              <summary>
+                Revisar mensagem do pedido <ArrowRight size={14} />
+              </summary>
               <div className="tray-message-bar">
                 <span>Mensagem pronta para envio</span>
                 <div className="tray-message-actions">
@@ -1815,7 +1685,7 @@ export default function Home() {
               ) : (
                 <pre className="tray-message-preview">{activeOrderMessage}</pre>
               )}
-            </div>
+            </details>
 
             <div className="ticket-actions">
               <button
@@ -1823,7 +1693,7 @@ export default function Home() {
                 className="button button-lime ticket-send"
                 onClick={() => void handleSendOrderToWhatsApp()}
               >
-                Enviar Encomenda no WhatsApp <Send size={15} />
+                Finalizar Compra no WhatsApp <Send size={15} />
               </button>
               <button
                 type="button"
@@ -1844,20 +1714,18 @@ export default function Home() {
       <section className="location-section" id="localizacao">
         <div className="location-head">
           <h2>
-            Visite a loja em <span>Ipaussu.</span>
+            Encontre a <span>WPlay.</span>
           </h2>
         </div>
 
         <div className="location-layout">
           <div className="location-card">
             <div className="location-card-top">
-              <span className="location-pin-badge" aria-hidden="true">
-                <MapPin size={22} />
-              </span>
               <img
                 src={activeLogoUrl}
                 alt="Logo Oficial WPlay Eletrônicos"
                 className="location-card-logo"
+                onError={(e) => handleImageErrorFallback(e, officialLogoPath)}
               />
             </div>
 
@@ -1881,30 +1749,21 @@ export default function Home() {
               className="location-route-btn"
               href={mapsHref}
               target="_blank"
-              rel="noreferrer"
+              rel="noopener noreferrer"
+              onClick={(e) => {
+                e.preventDefault();
+                void openSafeExternalLink(
+                  settings.maps_url,
+                  defaultStoreSettings.maps_url,
+                  "Google Maps WPlay"
+                );
+              }}
             >
-              <Navigation size={16} /> Ver rota no mapa
+              <Navigation size={16} /> Ver rota no Google Maps
             </a>
           </div>
 
           <div className="location-map-shell">
-            <div className="location-map-floating">
-              <div>
-                <strong>{settings.address_line}</strong>
-                <span>
-                  {settings.address_line} - {settings.city}, {settings.postal_code}, Brasil
-                </span>
-              </div>
-              <a
-                className="location-maps-pill"
-                href={mapsHref}
-                target="_blank"
-                rel="noreferrer"
-              >
-                <ArrowUpRight size={15} /> Abrir no Maps
-              </a>
-            </div>
-
             <iframe
               title={`Mapa de localização ${settings.store_name}`}
               src={mapsEmbedUrl}
@@ -1916,70 +1775,88 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Footer with Official WPlay Logo */}
+      {/* Footer with Official WPlay Logo (5x rapid click on brand triggers discrete owner access) */}
       <footer className="footer">
         <div className="footer-brand-block">
           <Brand
             storeName={settings.store_name}
             city={settings.city}
             logoUrl={activeLogoUrl}
+            onSecretTrigger={() => router.push("/admin")}
           />
-          <p className="footer-address-line">
-            {settings.address_line} · {settings.city} · CEP {settings.postal_code}
-          </p>
         </div>
 
         <div className="footer-links">
-          <a href={mapsHref} target="_blank" rel="noreferrer">
+          <a
+            href={mapsHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => {
+              e.preventDefault();
+              void openSafeExternalLink(
+                settings.maps_url,
+                defaultStoreSettings.maps_url,
+                "Google Maps WPlay"
+              );
+            }}
+          >
             <MapPin size={14} /> Abrir no Google Maps
           </a>
-          <a href={settings.instagram_url} target="_blank" rel="noreferrer">
+          <a
+            href={safeInstagramUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => {
+              e.preventDefault();
+              void openSafeExternalLink(
+                settings.instagram_url,
+                defaultStoreSettings.instagram_url,
+                "Instagram WPlay"
+              );
+            }}
+          >
             {settings.instagram_handle} <ArrowUpRight size={14} />
           </a>
-          <a href={primaryWhatsAppHref} target="_blank" rel="noreferrer">
+          <a
+            href={primaryWhatsAppHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => {
+              e.preventDefault();
+              void handleSendOrderToWhatsApp();
+            }}
+          >
             WhatsApp Oficial <ArrowUpRight size={14} />
           </a>
-          <Link href="/admin" className="footer-admin-link">
-            <Lock size={13} /> Painel Admin (/admin)
-          </Link>
         </div>
       </footer>
 
-      {/* Interactive Floating Bag / Atmosphere Indicator / WhatsApp Dock */}
+      {/* Interactive Floating Bag / WhatsApp Dock */}
       <div className="floating-dock">
-        <a
-          href={stageAtmosphereMeta[atmosphereStage].href}
-          className="atmosphere-stage-pill"
-          aria-label={`Seção ativa: ${stageAtmosphereMeta[atmosphereStage].label}`}
-        >
-          <span className="atmosphere-stage-dot" />
-          <span>{stageAtmosphereMeta[atmosphereStage].label}</span>
-        </a>
-
         {totalOrderCount > 0 && (
           <a href="#encomenda" className="floating-bag">
             <span className="bag-count">{totalOrderCount}</span>
-            <span>Ver bandeja</span>
+            <span>Finalizar ({totalOrderCount})</span>
           </a>
         )}
-        <a
+        <button
+          type="button"
           className="whatsapp-float"
-          href={primaryWhatsAppHref}
-          target="_blank"
-          rel="noreferrer"
-          aria-label="Chamar a WPlay no WhatsApp"
+          onClick={() => void handleSendOrderToWhatsApp()}
+          aria-label="Comprar ou chamar a WPlay no WhatsApp"
         >
           <img
             src={activeLogoUrl}
             alt="Logo WPlay"
             className="whatsapp-float-logo"
+            onError={(e) => handleImageErrorFallback(e, officialLogoPath)}
           />
           <span>WhatsApp</span>
           <ArrowUpRight size={15} />
-        </a>
+        </button>
       </div>
 
-      {/* Interactive Product Quick-Look Sheet (with 360° 3D Turntable for Celulares / iPhones) */}
+      {/* Interactive Product Quick-Look Sheet (with 360° 3D Turntable for all products) */}
       {inspectedProduct && (
         <div
           className="quicklook-backdrop"
@@ -1989,12 +1866,9 @@ export default function Home() {
           }}
         >
           <div
-            className={
-              isIphoneOrCellularProduct(inspectedProduct)
-                ? "quicklook-sheet quicklook-sheet-3d"
-                : "quicklook-sheet"
-            }
+            className="quicklook-sheet quicklook-sheet-3d"
             role="dialog"
+            tabIndex={-1}
             aria-modal="true"
             aria-labelledby="quicklook-title"
           >
@@ -2018,152 +1892,98 @@ export default function Home() {
                 </div>
 
                 <div className="quicklook-content quicklook-content-3d">
-                  <div className="quicklook-tags-row">
-                    <span className="product-tag">{inspectedProduct.category}</span>
-                    <span className="quicklook-spec-chip">
-                      {activeIphoneModel.chipset} · {activeIphoneModel.displaySize}
-                    </span>
-                  </div>
+                  <span className="product-tag">{inspectedProduct.category}</span>
 
                   <h3 id="quicklook-title">{activeIphoneModel.name}</h3>
-                  <p className="quicklook-highlight">{activeIphoneModel.highlight}</p>
+                  <p className="quicklook-highlight">
+                    Escolha seu modelo (13 ao 18 Pro Max), memória compatível e acabamento.
+                  </p>
 
-                  {/* 1. Generation Selector (13 to 18) */}
-                  <div className="ql-section">
-                    <span className="ql-label">Geração (do 13 ao 18 Pro Max)</span>
-                    <div className="ql-gen-row">
-                      {iphoneGenerations.map((gen) => (
-                        <button
-                          key={gen}
-                          type="button"
-                          className={
-                            activeIphoneGen === gen ? "ql-gen-btn active" : "ql-gen-btn"
-                          }
-                          onClick={() => {
-                            setActiveIphoneGen(gen);
-                            const defaultInGen =
-                              iphoneLineup.find(
-                                (m) => m.generation === gen && m.tier === "promax"
-                              ) || iphoneLineup.find((m) => m.generation === gen);
-                            if (defaultInGen) {
-                              applyIphoneConfiguration(defaultInGen);
-                            }
-                          }}
-                        >
-                          iPhone {gen}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-
-                  {/* 2. Specific Model within Generation */}
-                  <div className="ql-section">
-                    <span className="ql-label">Modelo da linha iPhone {activeIphoneGen}</span>
-                    <div className="variant-row">
-                      {currentGenerationModels.map((m) => {
-                        const active = m.id === activeIphoneModel.id;
-                        return (
-                          <button
-                            key={m.id}
-                            type="button"
-                            className={active ? "variant-chip active" : "variant-chip"}
-                            onClick={() => applyIphoneConfiguration(m)}
-                          >
-                            {m.name}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* 3. Compatible Storage for Selected Model */}
-                  <div className="ql-section">
-                    <span className="ql-label">
-                      Memória compatível com {activeIphoneModel.name}
-                    </span>
-                    <div className="variant-row">
-                      {activeIphoneModel.storages.map((cap) => {
-                        const active = cap === activeIphoneStorage;
-                        return (
-                          <button
-                            key={cap}
-                            type="button"
-                            className={active ? "variant-chip active" : "variant-chip"}
-                            onClick={() =>
-                              applyIphoneConfiguration(
-                                activeIphoneModel,
-                                cap,
-                                activeIphoneFinish
-                              )
-                            }
-                          >
-                            {cap}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-
-                  {/* 4. Official Finishes & Condition */}
-                  <div className="ql-section">
-                    <span className="ql-label">
-                      Acabamento ({activeIphoneFinish.name}) & Condição
-                    </span>
-                    <div className="variant-row">
-                      {activeIphoneModel.finishes.map((fin) => {
-                        const active = fin.id === activeIphoneFinish.id;
-                        return (
-                          <button
-                            key={fin.id}
-                            type="button"
-                            className={
-                              active
-                                ? "variant-chip variant-chip-swatch active"
-                                : "variant-chip variant-chip-swatch"
-                            }
-                            onClick={() =>
-                              applyIphoneConfiguration(
-                                activeIphoneModel,
-                                activeIphoneStorage,
-                                fin
-                              )
-                            }
-                          >
-                            <span
-                              className="finish-swatch-dot"
-                              style={{ background: fin.bodyHex }}
-                            />
-                            {fin.name}
-                          </button>
-                        );
-                      })}
-                      {(["Lacrado", "Seminovo"] as const).map((cond) => (
-                        <button
-                          key={cond}
-                          type="button"
-                          className={
-                            selectedIphoneCondition === cond
-                              ? "variant-chip active"
-                              : "variant-chip"
-                          }
-                          onClick={() =>
+                  <div className="quicklook-fields">
+                    <label>
+                      Modelo
+                      <select
+                        value={activeIphoneModel.id}
+                        onChange={(event) => {
+                          const nextModel = getIphoneModelById(event.target.value);
+                          setActiveIphoneGen(nextModel.generation);
+                          applyIphoneConfiguration(nextModel);
+                        }}
+                      >
+                        {iphoneGenerations.map((generation) => (
+                          <optgroup key={generation} label={`Linha iPhone ${generation}`}>
+                            {iphoneLineup
+                              .filter((model) => model.generation === generation)
+                              .map((model) => (
+                                <option key={model.id} value={model.id}>
+                                  {model.name}
+                                </option>
+                              ))}
+                          </optgroup>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Memória
+                      <select
+                        value={activeIphoneStorage}
+                        onChange={(event) =>
+                          applyIphoneConfiguration(
+                            activeIphoneModel,
+                            event.target.value,
+                            activeIphoneFinish
+                          )
+                        }
+                      >
+                        {activeIphoneModel.storages.map((capacity) => (
+                          <option key={capacity}>{capacity}</option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Acabamento
+                      <select
+                        value={activeIphoneFinish.id}
+                        onChange={(event) => {
+                          const finish = activeIphoneModel.finishes.find(
+                            (item) => item.id === event.target.value
+                          );
+                          if (finish)
                             applyIphoneConfiguration(
                               activeIphoneModel,
                               activeIphoneStorage,
-                              activeIphoneFinish,
-                              cond
-                            )
-                          }
-                        >
-                          {cond}
-                        </button>
-                      ))}
-                    </div>
+                              finish
+                            );
+                        }}
+                      >
+                        {activeIphoneModel.finishes.map((finish) => (
+                          <option value={finish.id} key={finish.id}>
+                            {finish.name}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                    <label>
+                      Condição
+                      <select
+                        value={selectedIphoneCondition}
+                        onChange={(event) =>
+                          setSelectedIphoneCondition(
+                            event.target.value as "Lacrado" | "Seminovo"
+                          )
+                        }
+                      >
+                        <option>Lacrado</option>
+                        <option>Seminovo</option>
+                      </select>
+                    </label>
                   </div>
 
-                  <div className="ql-summary-banner">
-                    <span>Selecionado:</span>
-                    <strong>{activeIphoneSummary}</strong>
+                  <div className="quicklook-trust-banner">
+                    <ShieldCheck size={14} />
+                    <span>
+                      Retirada em Ipaussu ou entrega · Aceitamos seu iPhone usado na troca
+                    </span>
                   </div>
 
                   <div className="quicklook-actions">
@@ -2172,7 +1992,7 @@ export default function Home() {
                       className="button button-lime"
                       onClick={() => void handleQuickProductConsult(inspectedProduct)}
                     >
-                      Chamar no WhatsApp <ArrowUpRight size={16} />
+                      Comprar pelo WhatsApp <ArrowUpRight size={16} />
                     </button>
                     <button
                       type="button"
@@ -2189,18 +2009,25 @@ export default function Home() {
                         }
                       }}
                     >
-                      Incluir na encomenda
+                      Incluir no pedido
                     </button>
                   </div>
                 </div>
               </>
             ) : (
               <>
-                <div className="quicklook-media">
-                  <img src={inspectedProduct.image} alt={inspectedProduct.name} />
+                <div className="quicklook-media quicklook-media-3d">
+                  <Product3DStudio
+                    product={inspectedProduct}
+                    variant={
+                      chosenVariants[inspectedProduct.id] ||
+                      inspectedProduct.variants?.[0] ||
+                      getDefaultVariantsForCategory(inspectedProduct.category)[0]
+                    }
+                  />
                 </div>
 
-                <div className="quicklook-content">
+                <div className="quicklook-content quicklook-content-3d">
                   <span className="product-tag">{inspectedProduct.category}</span>
                   <h3 id="quicklook-title">{inspectedProduct.name}</h3>
                   <p>{inspectedProduct.description}</p>
@@ -2226,13 +2053,20 @@ export default function Home() {
                     })}
                   </div>
 
+                  <div className="quicklook-trust-banner">
+                    <ShieldCheck size={14} />
+                    <span>
+                      Disponível em Ipaussu · Condição especial no PIX ou parcelamento
+                    </span>
+                  </div>
+
                   <div className="quicklook-actions">
                     <button
                       type="button"
                       className="button button-lime"
                       onClick={() => void handleQuickProductConsult(inspectedProduct)}
                     >
-                      Chamar no WhatsApp <ArrowUpRight size={16} />
+                      Comprar pelo WhatsApp <ArrowUpRight size={16} />
                     </button>
                     <button
                       type="button"
@@ -2249,12 +2083,70 @@ export default function Home() {
                         }
                       }}
                     >
-                      Incluir na encomenda
+                      Incluir no pedido
                     </button>
                   </div>
                 </div>
               </>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Smart Broken-Link / Popup Fallback Modal */}
+      {safeLinkRecovery && (
+        <div
+          className="quicklook-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Acesso direto garantido"
+          onMouseDown={(e) => {
+            if (e.target === e.currentTarget) setSafeLinkRecovery(null);
+          }}
+        >
+          <div className="safelink-modal">
+            <div className="safelink-head">
+              <span className="safelink-badge">
+                <ShieldCheck size={14} /> Link Verificado WPlay
+              </span>
+              <button
+                type="button"
+                className="quicklook-close"
+                onClick={() => setSafeLinkRecovery(null)}
+                aria-label="Fechar"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <h3>Continue para {safeLinkRecovery.label}</h3>
+            <p>
+              {safeLinkRecovery.repaired
+                ? "Detectamos um link desatualizado e ativamos automaticamente o endereço oficial da WPlay Eletrônicos."
+                : "Seu navegador bloqueou a abertura automática da nova guia. Use o botão direto abaixo:"}
+            </p>
+            <div className="safelink-actions">
+              <a
+                href={safeLinkRecovery.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="button button-lime"
+                onClick={() => setSafeLinkRecovery(null)}
+              >
+                Abrir {safeLinkRecovery.label} <ExternalLink size={15} />
+              </a>
+              {safeLinkRecovery.copiedMessage && (
+                <button
+                  type="button"
+                  className="button button-outline"
+                  onClick={() =>
+                    void handleCopyMessage(safeLinkRecovery.copiedMessage || "")
+                  }
+                >
+                  {copiedFeedback ? <Check size={15} /> : <Copy size={15} />}
+                  {copiedFeedback ? "Mensagem Copiada!" : "Copiar Pedido"}
+                </button>
+              )}
+            </div>
           </div>
         </div>
       )}

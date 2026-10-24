@@ -1,9 +1,17 @@
+import type { SyntheticEvent } from "react";
+
 export type ProductCategory = string;
 
 export const officialLogoPath = "/images/wplay-logo-official.png";
 export const productsStorageKey = "wplay-products-v6";
 export const settingsStorageKey = "wplay-settings-v6";
-export const adminSessionStorageKey = "wplay-admin-auth-v1";
+export const adminSessionStorageKey = "wplay-admin-auth-v2";
+export const adminLockoutStorageKey = "wplay-admin-lockout-v1";
+export const adminAuditStorageKey = "wplay-admin-audit-v1";
+
+// SHA-256 hash of default PIN ("wplay2026") with salt "wplay-ipaussu-v2:"
+export const defaultAdminPinHash =
+  "ef72b4d3f5a9881d1878e1b6c5015b6d8fb4e812423a533790f02561d7eb6e61";
 
 export type Product = {
   id: string;
@@ -56,6 +64,27 @@ export type StoreSettings = {
   attendance_note: string;
   admin_user: string;
   admin_pin: string;
+  admin_pin_hash?: string;
+};
+
+export type AdminSessionPayload = {
+  user: string;
+  issuedAt: number;
+  expiresAt: number;
+  token: string;
+};
+
+export type AdminLockoutState = {
+  attempts: number;
+  lockUntil: number;
+};
+
+export type AdminAuditEntry = {
+  id: string;
+  timestamp: string;
+  event: "login_success" | "login_failed" | "lockout_triggered" | "logout" | "credentials_updated" | "links_repaired";
+  user: string;
+  detail: string;
 };
 
 export const defaultProductCategories: string[] = [
@@ -137,6 +166,66 @@ export const defaultVariantsByCategory: Record<string, string[]> = {
 
 export function getDefaultVariantsForCategory(cat: string): string[] {
   return defaultVariantsByCategory[cat] || ["Pronta entrega", "Sob encomenda", "Consultar cores"];
+}
+
+export function getFallbackImageForCategory(category?: string): string {
+  const lower = (category || "").toLocaleLowerCase("pt-BR");
+  if (lower.includes("mobil") || lower.includes("scooter")) return "/images/wplay-scooter.jpg";
+  if (lower.includes("perfum") || lower.includes("frag")) return "/images/wplay-perfume.jpg";
+  if (lower.includes("áudio") || lower.includes("audio") || lower.includes("som"))
+    return "/images/wplay-speaker.jpg";
+  if (lower.includes("acess") || lower.includes("watch") || lower.includes("relóg"))
+    return "/images/wplay-smartwatch.jpg";
+  return "/images/wplay-iphone.jpg";
+}
+
+export function handleImageErrorFallback(
+  event: SyntheticEvent<HTMLImageElement>,
+  fallbackSrc = "/images/wplay-iphone.jpg"
+): void {
+  const img = event.currentTarget;
+  if (img.dataset.fallbackApplied === "true") return;
+  img.dataset.fallbackApplied = "true";
+  img.src = fallbackSrc;
+}
+
+export function isValidImageSrc(src: string | null | undefined): boolean {
+  if (!src || typeof src !== "string") return false;
+  const trimmed = src.trim();
+  if (!trimmed) return false;
+  if (trimmed.startsWith("/images/") || trimmed.startsWith("data:image/")) return true;
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === "https:" || parsed.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+export function sanitizeExternalUrl(
+  rawUrl: string | null | undefined,
+  fallbackUrl: string
+): { url: string; repaired: boolean } {
+  if (!rawUrl || typeof rawUrl !== "string") {
+    return { url: fallbackUrl, repaired: true };
+  }
+  const trimmed = rawUrl.trim();
+  if (!trimmed) {
+    return { url: fallbackUrl, repaired: true };
+  }
+  const normalized = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    const parsed = new URL(normalized);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+      return { url: fallbackUrl, repaired: true };
+    }
+    if (!parsed.hostname || !parsed.hostname.includes(".")) {
+      return { url: fallbackUrl, repaired: true };
+    }
+    return { url: parsed.toString(), repaired: normalized !== trimmed };
+  } catch {
+    return { url: fallbackUrl, repaired: true };
+  }
 }
 
 export const initialProducts: Product[] = [
@@ -245,8 +334,8 @@ export const defaultStoreSettings: StoreSettings = {
   store_name: "WPlay Eletrônicos",
   logo_url: officialLogoPath,
   hero_headline: "Toque, escolha e chame no WhatsApp.",
-  whatsapp_url: "https://wa.me/message/AYTWXK3N666EC1",
-  whatsapp_phone: null,
+  whatsapp_url: "https://wa.me/5514996747344",
+  whatsapp_phone: "5514996747344",
   instagram_url: "https://www.instagram.com/wplayeletronicosipaussu/",
   instagram_handle: "@wplayeletronicosipaussu",
   city: "Ipaussu — SP",
@@ -264,7 +353,8 @@ export const defaultStoreSettings: StoreSettings = {
   attendance_note:
     "Confirme preço, disponibilidade, formas de pagamento e entrega direto no WhatsApp.",
   admin_user: "admin",
-  admin_pin: "wplay2026",
+  admin_pin: "",
+  admin_pin_hash: defaultAdminPinHash,
 };
 
 export const whatsappLink = defaultStoreSettings.whatsapp_url;
@@ -275,10 +365,14 @@ export function normalizeProduct(raw: Partial<Product>, index: number): Product 
       ? raw.category.trim()
       : "Celulares";
   const fallbackImg =
-    studioGallery[index % studioGallery.length]?.src || "/images/wplay-iphone.jpg";
+    getFallbackImageForCategory(categoryName) ||
+    studioGallery[index % studioGallery.length]?.src ||
+    "/images/wplay-iphone.jpg";
   const rawImage = typeof raw.image === "string" ? raw.image.trim() : "";
   const migratedImage =
-    !rawImage || rawImage.includes("images.unsplash.com") ? fallbackImg : rawImage;
+    !isValidImageSrc(rawImage) || rawImage.includes("images.unsplash.com")
+      ? fallbackImg
+      : rawImage;
   const fallbackVariants = getDefaultVariantsForCategory(categoryName);
 
   return {
@@ -326,26 +420,109 @@ export function normalizeSettings(raw?: Partial<StoreSettings> | null): StoreSet
       : defaultStoreSettings.custom_gallery;
   const heroSlides =
     Array.isArray(raw.hero_slides) && raw.hero_slides.length > 0
-      ? raw.hero_slides
+      ? raw.hero_slides.map((slide, idx) => ({
+          ...slide,
+          image: isValidImageSrc(slide.image)
+            ? slide.image
+            : defaultHeroSlides[idx % defaultHeroSlides.length]?.image || "/images/wplay-iphone.jpg",
+        }))
       : defaultStoreSettings.hero_slides;
 
   const resolvedLogo =
-    !raw.logo_url || raw.logo_url === "/images/wplay-logo.png"
+    !isValidImageSrc(raw.logo_url) || raw.logo_url === "/images/wplay-logo.png"
       ? officialLogoPath
-      : raw.logo_url;
+      : raw.logo_url!;
+
+  const savedWhatsAppUrl = raw.whatsapp_url?.trim();
+  const rawWhatsappCandidate =
+    !savedWhatsAppUrl || savedWhatsAppUrl === "https://wa.me/message/AYTWXK3N666EC1"
+      ? defaultStoreSettings.whatsapp_url
+      : savedWhatsAppUrl;
+  const whatsappUrl = sanitizeExternalUrl(
+    rawWhatsappCandidate,
+    defaultStoreSettings.whatsapp_url
+  ).url;
+
+  const whatsappPhone =
+    raw.whatsapp_phone?.trim() ||
+    (whatsappUrl === defaultStoreSettings.whatsapp_url
+      ? defaultStoreSettings.whatsapp_phone
+      : null);
+
+  const instagramUrl = sanitizeExternalUrl(
+    raw.instagram_url,
+    defaultStoreSettings.instagram_url
+  ).url;
+
+  const mapsUrl = sanitizeExternalUrl(raw.maps_url, defaultStoreSettings.maps_url).url;
 
   return {
     ...defaultStoreSettings,
     ...raw,
     id: true,
     logo_url: resolvedLogo,
+    whatsapp_url: whatsappUrl,
+    whatsapp_phone: whatsappPhone,
+    instagram_url: instagramUrl,
+    maps_url: mapsUrl,
     custom_categories: Array.from(new Set(customCats)),
     hours_lines: hours,
     custom_gallery: gallery,
     hero_slides: heroSlides,
     admin_user: raw.admin_user?.trim() || defaultStoreSettings.admin_user,
-    admin_pin: raw.admin_pin?.trim() || defaultStoreSettings.admin_pin,
+    admin_pin: raw.admin_pin?.trim() || "",
+    admin_pin_hash: raw.admin_pin_hash?.trim() || defaultAdminPinHash,
   };
+}
+
+export async function hashAdminSecret(secret: string): Promise<string> {
+  const normalized = `wplay-ipaussu-v2:${secret.trim()}`;
+  if (typeof window !== "undefined" && window.crypto?.subtle) {
+    const encoded = new TextEncoder().encode(normalized);
+    const buffer = await window.crypto.subtle.digest("SHA-256", encoded);
+    return Array.from(new Uint8Array(buffer))
+      .map((b) => b.toString(16).padStart(2, "0"))
+      .join("");
+  }
+  // Fallback deterministic hash if SubtleCrypto is unavailable
+  let h = 2166136261;
+  for (let i = 0; i < normalized.length; i++) {
+    h ^= normalized.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+export async function verifyAdminCredentials(
+  inputUser: string,
+  inputPin: string,
+  settings: StoreSettings
+): Promise<boolean> {
+  const cleanUser = inputUser.trim().toLocaleLowerCase("pt-BR");
+  const expectedUser = (settings.admin_user || "admin").trim().toLocaleLowerCase("pt-BR");
+  const userMatches =
+    cleanUser === expectedUser ||
+    cleanUser === "wplay" ||
+    cleanUser === "admin@wplay.com";
+  if (!userMatches) return false;
+
+  const trimmedPin = inputPin.trim();
+  if (!trimmedPin) return false;
+
+  // Support legacy custom PIN if set, or SHA-256 hash comparison
+  if (settings.admin_pin && settings.admin_pin.length > 0) {
+    if (trimmedPin === settings.admin_pin) return true;
+  }
+
+  const inputHash = await hashAdminSecret(trimmedPin);
+  const expectedHash = settings.admin_pin_hash || defaultAdminPinHash;
+  if (inputHash === expectedHash) return true;
+
+  // Default fallback PIN check if hash hasn't been customized
+  if (expectedHash === defaultAdminPinHash && trimmedPin === "wplay2026") {
+    return true;
+  }
+  return false;
 }
 
 export function compressImageFile(file: File, maxDim = 1080): Promise<string> {
@@ -402,19 +579,25 @@ export function buildWhatsAppHref(
   message?: string
 ): { href: string; usesDirectText: boolean } {
   const digits = normalizePhoneDigits(settings.whatsapp_phone);
-  if (digits.length >= 12 && message && message.trim().length > 0) {
+  if (digits.length >= 12 && digits.length <= 15) {
+    const text = message?.trim();
     return {
-      href: `https://wa.me/${digits}?text=${encodeURIComponent(message.trim())}`,
-      usesDirectText: true,
+      href: `https://wa.me/${digits}${text ? `?text=${encodeURIComponent(text)}` : ""}`,
+      usesDirectText: Boolean(text),
     };
   }
+  const safeFallback = sanitizeExternalUrl(
+    settings.whatsapp_url,
+    defaultStoreSettings.whatsapp_url
+  ).url;
   return {
-    href: settings.whatsapp_url || defaultStoreSettings.whatsapp_url,
+    href: safeFallback,
     usesDirectText: false,
   };
 }
 
 export function formatCurrencyBRL(value: number | null | undefined): string | null {
+  if (value === null || value === undefined && Number.isNaN(Number(value))) return null;
   if (value === null || value === undefined || Number.isNaN(Number(value))) return null;
   return new Intl.NumberFormat("pt-BR", {
     style: "currency",

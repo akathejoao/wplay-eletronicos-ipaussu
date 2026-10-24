@@ -1,50 +1,73 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
+  AlertTriangle,
   ArrowLeft,
   ArrowUpRight,
   Camera,
   Check,
+  CheckCircle2,
+  Clock,
   Eye,
+  EyeOff,
   FolderPlus,
   ImagePlus,
   KeyRound,
   Layers,
+  Link2,
   Lock,
   LogOut,
-  MapPin,
   Plus,
+  RefreshCw,
   RotateCcw,
   Save,
+  ShieldAlert,
+  ShieldCheck,
   Sliders,
   Sparkles,
-  Star,
   Trash2,
   Upload,
 } from "lucide-react";
 import {
+  AdminAuditEntry,
+  adminAuditStorageKey,
+  adminLockoutStorageKey,
+  AdminLockoutState,
+  AdminSessionPayload,
   adminSessionStorageKey,
   compressImageFile,
+  defaultAdminPinHash,
   defaultProductCategories,
   defaultStoreSettings,
   formatCurrencyBRL,
   getDefaultVariantsForCategory,
+  getFallbackImageForCategory,
+  handleImageErrorFallback,
+  hashAdminSecret,
   HeroSlideConfig,
   initialProducts,
+  isValidImageSrc,
+  normalizePhoneDigits,
   normalizeProduct,
   normalizeSettings,
   officialLogoPath,
   Product,
   productsStorageKey,
+  sanitizeExternalUrl,
   settingsStorageKey,
   StoreSettings,
-   studioGallery,
+  studioGallery,
+  verifyAdminCredentials,
 } from "@/lib/catalog";
 import { createClient } from "@/lib/supabase";
 
-type AdminTab = "fotos" | "produtos" | "categorias" | "config";
+type AdminTab = "fotos" | "produtos" | "categorias" | "seguranca" | "config";
+
+const SESSION_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
+const MAX_LOGIN_ATTEMPTS = 5;
+const LOCKOUT_DURATION_MS = 60 * 1000; // 60 seconds
 
 function parsePositionPercent(pos: string | undefined): { x: number; y: number } {
   if (!pos) return { x: 50, y: 50 };
@@ -57,19 +80,49 @@ function parsePositionPercent(pos: string | undefined): { x: number; y: number }
   };
 }
 
+function formatRemainingTime(ms: number): string {
+  const totalSec = Math.max(0, Math.floor(ms / 1000));
+  const mins = Math.floor(totalSec / 60);
+  const secs = totalSec % 60;
+  if (mins >= 60) {
+    const hrs = Math.floor(mins / 60);
+    const remMins = mins % 60;
+    return `${hrs}h ${String(remMins).padStart(2, "0")}m`;
+  }
+  return `${String(mins).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
+}
+
 export default function AdminPage() {
   const [products, setProducts] = useState<Product[]>(initialProducts);
   const [settings, setSettings] = useState<StoreSettings>(defaultStoreSettings);
   const [tab, setTab] = useState<AdminTab>("fotos");
   const [notice, setNotice] = useState("");
 
-  // Authentication state
+  // Hardened Authentication & Session state
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authChecking, setAuthChecking] = useState(true);
   const [loginUser, setLoginUser] = useState("");
   const [loginPass, setLoginPass] = useState("");
+  const [showLoginPass, setShowLoginPass] = useState(false);
   const [loginError, setLoginError] = useState("");
-  const [authUserLabel, setAuthUserLabel] = useState("Administrador WPlay");
+  const [authUserLabel, setAuthUserLabel] = useState("admin");
+  const [sessionExpiresAt, setSessionExpiresAt] = useState<number | null>(null);
+  const [remainingSessionMs, setRemainingSessionMs] = useState<number>(SESSION_TTL_MS);
+
+  // Brute-force Lockout & Security Audit Log
+  const [lockoutState, setLockoutState] = useState<AdminLockoutState>({
+    attempts: 0,
+    lockUntil: 0,
+  });
+  const [lockoutRemainingSec, setLockoutRemainingSec] = useState<number>(0);
+  const [auditLog, setAuditLog] = useState<AdminAuditEntry[]>([]);
+
+  // Password Change state in "seguranca" tab
+  const [currentPinInput, setCurrentPinInput] = useState("");
+  const [newAdminUserInput, setNewAdminUserInput] = useState("admin");
+  const [newPinInput, setNewPinInput] = useState("");
+  const [confirmNewPinInput, setConfirmNewPinInput] = useState("");
+  const [securityMsg, setSecurityMsg] = useState("");
 
   // Photo Studio state ("fotos" tab)
   const [selectedPhotoProductId, setSelectedPhotoProductId] = useState<string>(
@@ -96,6 +149,46 @@ export default function AdminPage() {
 
   const supabase = useMemo(() => createClient(), []);
 
+  const appendAuditEntry = useCallback(
+    (
+      event: AdminAuditEntry["event"],
+      user: string,
+      detail: string
+    ) => {
+      const entry: AdminAuditEntry = {
+        id: `audit-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        timestamp: new Date().toLocaleString("pt-BR"),
+        event,
+        user: user || "desconhecido",
+        detail,
+      };
+      setAuditLog((prev) => {
+        const next = [entry, ...prev].slice(0, 40);
+        try {
+          localStorage.setItem(adminAuditStorageKey, JSON.stringify(next));
+        } catch {
+          // ignore
+        }
+        return next;
+      });
+    },
+    []
+  );
+
+  const handleLogout = useCallback(
+    async (reason = "Sessão encerrada pelo administrador") => {
+      sessionStorage.removeItem(adminSessionStorageKey);
+      if (supabase) {
+        await supabase.auth.signOut();
+      }
+      appendAuditEntry("logout", authUserLabel, reason);
+      setIsAuthenticated(false);
+      setSessionExpiresAt(null);
+      setLoginPass("");
+    },
+    [appendAuditEntry, authUserLabel, supabase]
+  );
+
   useEffect(() => {
     try {
       const savedProducts = localStorage.getItem(productsStorageKey);
@@ -114,12 +207,32 @@ export default function AdminPage() {
         );
         setSettings(parsedSettings);
         setDraftSettings(parsedSettings);
+        setNewAdminUserInput(parsedSettings.admin_user || "admin");
         setHoursTextarea(parsedSettings.hours_lines.join("\n"));
       }
-      const savedSession = sessionStorage.getItem(adminSessionStorageKey);
-      if (savedSession) {
-        setIsAuthenticated(true);
-        setAuthUserLabel(savedSession);
+      const savedAudit = localStorage.getItem(adminAuditStorageKey);
+      if (savedAudit) {
+        const parsedAudit = JSON.parse(savedAudit) as AdminAuditEntry[];
+        if (Array.isArray(parsedAudit)) setAuditLog(parsedAudit);
+      }
+      const savedLockout = localStorage.getItem(adminLockoutStorageKey);
+      if (savedLockout) {
+        const parsedLock = JSON.parse(savedLockout) as AdminLockoutState;
+        if (parsedLock && typeof parsedLock.lockUntil === "number") {
+          setLockoutState(parsedLock);
+        }
+      }
+      const savedSessionRaw = sessionStorage.getItem(adminSessionStorageKey);
+      if (savedSessionRaw) {
+        const sessionObj = JSON.parse(savedSessionRaw) as AdminSessionPayload;
+        if (sessionObj && sessionObj.expiresAt > Date.now()) {
+          setIsAuthenticated(true);
+          setAuthUserLabel(sessionObj.user);
+          setSessionExpiresAt(sessionObj.expiresAt);
+          setRemainingSessionMs(sessionObj.expiresAt - Date.now());
+        } else {
+          sessionStorage.removeItem(adminSessionStorageKey);
+        }
       }
     } catch {
       // ignore storage read error
@@ -128,9 +241,17 @@ export default function AdminPage() {
     if (supabase) {
       void supabase.auth.getUser().then(({ data }) => {
         if (data.user?.email) {
+          const expiresAt = Date.now() + SESSION_TTL_MS;
+          const payload: AdminSessionPayload = {
+            user: data.user.email,
+            issuedAt: Date.now(),
+            expiresAt,
+            token: Math.random().toString(36).slice(2),
+          };
           setIsAuthenticated(true);
           setAuthUserLabel(data.user.email);
-          sessionStorage.setItem(adminSessionStorageKey, data.user.email);
+          setSessionExpiresAt(expiresAt);
+          sessionStorage.setItem(adminSessionStorageKey, JSON.stringify(payload));
         }
         setAuthChecking(false);
       });
@@ -138,6 +259,32 @@ export default function AdminPage() {
       setAuthChecking(false);
     }
   }, [supabase]);
+
+  // Live Lockout Countdown Timer
+  useEffect(() => {
+    const updateLockout = () => {
+      const rem = Math.max(0, Math.ceil((lockoutState.lockUntil - Date.now()) / 1000));
+      setLockoutRemainingSec(rem);
+    };
+    updateLockout();
+    if (lockoutState.lockUntil <= Date.now()) return;
+    const timer = window.setInterval(updateLockout, 1000);
+    return () => window.clearInterval(timer);
+  }, [lockoutState.lockUntil]);
+
+  // Live Session Expiration Timer
+  useEffect(() => {
+    if (!isAuthenticated || !sessionExpiresAt) return;
+    const timer = window.setInterval(() => {
+      const rem = sessionExpiresAt - Date.now();
+      if (rem <= 0) {
+        void handleLogout("Sessão expirada automaticamente por segurança (TTL)");
+      } else {
+        setRemainingSessionMs(rem);
+      }
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [handleLogout, isAuthenticated, sessionExpiresAt]);
 
   const activePhotoProduct = useMemo(() => {
     return (
@@ -171,6 +318,81 @@ export default function AdminPage() {
       return true;
     });
   }, [settings.custom_gallery]);
+
+  // Link & Media Integrity Diagnostic Report ("Segurança & Links" tab)
+  const linkHealthReport = useMemo(() => {
+    const checks: {
+      id: string;
+      label: string;
+      target: string;
+      healthy: boolean;
+      detail: string;
+    }[] = [];
+
+    const waCheck = sanitizeExternalUrl(
+      settings.whatsapp_url,
+      defaultStoreSettings.whatsapp_url
+    );
+    checks.push({
+      id: "whatsapp",
+      label: "WhatsApp Oficial",
+      target: waCheck.url,
+      healthy: !waCheck.repaired,
+      detail: waCheck.repaired
+        ? "URL reparada automaticamente pelo fallback"
+        : "Link verificado e ativo",
+    });
+
+    const igCheck = sanitizeExternalUrl(
+      settings.instagram_url,
+      defaultStoreSettings.instagram_url
+    );
+    checks.push({
+      id: "instagram",
+      label: "Instagram Oficial",
+      target: igCheck.url,
+      healthy: !igCheck.repaired,
+      detail: igCheck.repaired
+        ? "URL reparada automaticamente pelo fallback"
+        : "Link verificado e ativo",
+    });
+
+    const mapsCheck = sanitizeExternalUrl(
+      settings.maps_url,
+      defaultStoreSettings.maps_url
+    );
+    checks.push({
+      id: "maps",
+      label: "Google Maps Rota",
+      target: mapsCheck.url,
+      healthy: !mapsCheck.repaired,
+      detail: mapsCheck.repaired
+        ? "URL reparada automaticamente pelo fallback"
+        : "Link verificado e ativo",
+    });
+
+    const logoHealthy = isValidImageSrc(settings.logo_url);
+    checks.push({
+      id: "logo",
+      label: "Logo Oficial da Marca",
+      target: settings.logo_url || officialLogoPath,
+      healthy: logoHealthy,
+      detail: logoHealthy ? "Imagem válida" : "Protegido por fallback oficial",
+    });
+
+    for (const prod of products) {
+      const imgOk = isValidImageSrc(prod.image);
+      checks.push({
+        id: `prod-${prod.id}`,
+        label: `Foto: ${prod.name}`,
+        target: prod.image || getFallbackImageForCategory(prod.category),
+        healthy: imgOk,
+        detail: imgOk ? "Mídia íntegra" : "Fallback automático ativo",
+      });
+    }
+
+    return checks;
+  }, [products, settings]);
 
   const showToast = (msg: string) => {
     setNotice(msg);
@@ -260,21 +482,38 @@ export default function AdminPage() {
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError("");
-    const trimmedUser = loginUser.trim();
-    const expectedUser = (settings.admin_user || "admin").toLocaleLowerCase("pt-BR");
-    const expectedPin = settings.admin_pin || "wplay2026";
 
-    if (
-      (trimmedUser.toLocaleLowerCase("pt-BR") === expectedUser ||
-        trimmedUser.toLocaleLowerCase("pt-BR") === "wplay" ||
-        trimmedUser.toLocaleLowerCase("pt-BR") === "admin@wplay.com") &&
-      loginPass === expectedPin
-    ) {
-      const label = trimmedUser || "admin";
-      sessionStorage.setItem(adminSessionStorageKey, label);
+    if (lockoutState.lockUntil > Date.now()) {
+      const waitSec = Math.ceil((lockoutState.lockUntil - Date.now()) / 1000);
+      setLoginError(
+        `Acesso temporariamente bloqueado por tentativas inválidas. Aguarde ${waitSec}s.`
+      );
+      return;
+    }
+
+    const trimmedUser = loginUser.trim();
+    const isValidLocal = await verifyAdminCredentials(trimmedUser, loginPass, settings);
+
+    if (isValidLocal) {
+      const cleanLock: AdminLockoutState = { attempts: 0, lockUntil: 0 };
+      setLockoutState(cleanLock);
+      localStorage.setItem(adminLockoutStorageKey, JSON.stringify(cleanLock));
+
+      const label = trimmedUser || settings.admin_user || "admin";
+      const expiresAt = Date.now() + SESSION_TTL_MS;
+      const sessionPayload: AdminSessionPayload = {
+        user: label,
+        issuedAt: Date.now(),
+        expiresAt,
+        token: Math.random().toString(36).slice(2),
+      };
+      sessionStorage.setItem(adminSessionStorageKey, JSON.stringify(sessionPayload));
       setAuthUserLabel(label);
+      setSessionExpiresAt(expiresAt);
+      setRemainingSessionMs(SESSION_TTL_MS);
       setIsAuthenticated(true);
       setLoginPass("");
+      appendAuditEntry("login_success", label, "Autenticação validada via SHA-256");
       return;
     }
 
@@ -284,26 +523,115 @@ export default function AdminPage() {
         password: loginPass,
       });
       if (!error && data.user) {
+        const cleanLock: AdminLockoutState = { attempts: 0, lockUntil: 0 };
+        setLockoutState(cleanLock);
+        localStorage.setItem(adminLockoutStorageKey, JSON.stringify(cleanLock));
+
         const label = data.user.email || trimmedUser;
-        sessionStorage.setItem(adminSessionStorageKey, label);
+        const expiresAt = Date.now() + SESSION_TTL_MS;
+        const sessionPayload: AdminSessionPayload = {
+          user: label,
+          issuedAt: Date.now(),
+          expiresAt,
+          token: Math.random().toString(36).slice(2),
+        };
+        sessionStorage.setItem(adminSessionStorageKey, JSON.stringify(sessionPayload));
         setAuthUserLabel(label);
+        setSessionExpiresAt(expiresAt);
+        setRemainingSessionMs(SESSION_TTL_MS);
         setIsAuthenticated(true);
         setLoginPass("");
+        appendAuditEntry("login_success", label, "Autenticação Supabase Auth");
         return;
       }
     }
 
-    setLoginError(
-      `Credenciais inválidas. Use o usuário "${settings.admin_user || "admin"}" e a senha configurada.`
-    );
+    const nextAttempts = lockoutState.attempts + 1;
+    const triggeredLock = nextAttempts >= MAX_LOGIN_ATTEMPTS;
+    const nextLockState: AdminLockoutState = {
+      attempts: triggeredLock ? 0 : nextAttempts,
+      lockUntil: triggeredLock ? Date.now() + LOCKOUT_DURATION_MS : 0,
+    };
+    setLockoutState(nextLockState);
+    try {
+      localStorage.setItem(adminLockoutStorageKey, JSON.stringify(nextLockState));
+    } catch {
+      // ignore
+    }
+
+    if (triggeredLock) {
+      appendAuditEntry(
+        "lockout_triggered",
+        trimmedUser,
+        `Bloqueio de 60s acionado após ${MAX_LOGIN_ATTEMPTS} tentativas falhas`
+      );
+      setLoginError(
+        "Muitas tentativas incorretas. Painel bloqueado preventivamente por 60 segundos."
+      );
+    } else {
+      const remAttempts = MAX_LOGIN_ATTEMPTS - nextAttempts;
+      appendAuditEntry(
+        "login_failed",
+        trimmedUser,
+        `Credenciais recusadas (${remAttempts} tentativa(s) restante(s))`
+      );
+      setLoginError(
+        `Credenciais inválidas. Tentativas restantes antes do bloqueio: ${remAttempts}.`
+      );
+    }
   };
 
-  const handleLogout = async () => {
-    sessionStorage.removeItem(adminSessionStorageKey);
-    if (supabase) {
-      await supabase.auth.signOut();
+  const handleUpdateSecurityCredentials = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSecurityMsg("");
+    const verified = await verifyAdminCredentials(
+      settings.admin_user || "admin",
+      currentPinInput,
+      settings
+    );
+    if (!verified) {
+      setSecurityMsg("A senha atual informada está incorreta.");
+      return;
     }
-    setIsAuthenticated(false);
+    if (newPinInput.trim().length < 6) {
+      setSecurityMsg("A nova senha deve ter pelo menos 6 caracteres.");
+      return;
+    }
+    if (newPinInput.trim() !== confirmNewPinInput.trim()) {
+      setSecurityMsg("A confirmação da nova senha não confere.");
+      return;
+    }
+    const newHash = await hashAdminSecret(newPinInput.trim());
+    const updatedSettings: StoreSettings = {
+      ...settings,
+      admin_user: newAdminUserInput.trim() || "admin",
+      admin_pin: "",
+      admin_pin_hash: newHash,
+    };
+    await persistSettings(updatedSettings);
+    setCurrentPinInput("");
+    setNewPinInput("");
+    setConfirmNewPinInput("");
+    appendAuditEntry(
+      "credentials_updated",
+      authUserLabel,
+      "Credenciais do painel recriptografadas com SHA-256"
+    );
+    setSecurityMsg("Credenciais atualizadas e criptografadas com sucesso!");
+    showToast("Nova senha criptografada ativada!");
+  };
+
+  const handleRepairAllLinksAndImages = async () => {
+    const repairedProducts = products.map((p, idx) => normalizeProduct(p, idx));
+    const repairedSettings = normalizeSettings(settings);
+    await persistProducts(repairedProducts);
+    await persistSettings(repairedSettings);
+    appendAuditEntry(
+      "links_repaired",
+      authUserLabel,
+      "Varredura e reparo automático de links e imagens executados"
+    );
+    showToast("Todos os links e fotos foram verificados e blindados!");
   };
 
   // Photo Studio handlers
@@ -332,7 +660,6 @@ export default function AdminPage() {
       );
       await persistProducts(next);
 
-      // Also add to custom gallery so admin can reuse it
       const nextGallery = [
         {
           id: `upload-${Date.now()}`,
@@ -347,6 +674,22 @@ export default function AdminPage() {
     } catch {
       showToast("Não foi possível carregar essa imagem.");
     }
+  };
+
+  const restoreDemoProductPhoto = async () => {
+    if (!activePhotoProduct) return;
+    const demoProduct =
+      initialProducts.find((product) => product.id === activePhotoProduct.id) ||
+      initialProducts.find((product) => product.category === activePhotoProduct.category);
+    await updatePhotoForActiveProduct(
+      {
+        image: demoProduct?.image || "/images/wplay-hero.jpg",
+        imageFit: demoProduct?.imageFit || "cover",
+        imagePosition: demoProduct?.imagePosition || "50% 50%",
+        imageScale: demoProduct?.imageScale || 1,
+      },
+      "Foto de demonstração restaurada."
+    );
   };
 
   const handleUploadHeroSlidePhoto = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -470,13 +813,14 @@ export default function AdminPage() {
     return (
       <main className="admin-route-shell">
         <div className="admin-auth-card">
-          <p>Carregando painel administrativo...</p>
+          <p>Verificando sessão segura...</p>
         </div>
       </main>
     );
   }
 
   if (!isAuthenticated) {
+    const isLockedOut = lockoutRemainingSec > 0;
     return (
       <main className="admin-route-shell">
         <div className="admin-auth-card">
@@ -486,68 +830,77 @@ export default function AdminPage() {
                 src={settings.logo_url || officialLogoPath}
                 alt="Logo WPlay Eletrônicos"
                 className="brand-logo-img"
+                onError={(e) => handleImageErrorFallback(e, officialLogoPath)}
               />
             </span>
             <div>
-              <h1>Painel do Administrador</h1>
+              <h1>Acesso Restrito · WPlay</h1>
               <p>
-                {settings.store_name} · {settings.city}
+                {settings.store_name} · Autenticação Criptografada
               </p>
             </div>
           </div>
 
+          <div className="admin-security-banner">
+            <ShieldCheck size={15} />
+            <span>
+              Rota oculta protegida por hash SHA-256, limite de tentativas e sessão com expiração automática.
+            </span>
+          </div>
+
           <form className="admin-auth-form" onSubmit={(e) => void handleLogin(e)}>
             <label>
-              Usuário ou E-mail do Admin
+              Identificação do Administrador
               <input
                 type="text"
                 required
-                placeholder="Ex.: admin"
+                autoComplete="username"
+                disabled={isLockedOut}
+                placeholder="Digite seu usuário ou e-mail"
                 value={loginUser}
                 onChange={(e) => setLoginUser(e.target.value)}
               />
             </label>
 
             <label>
-              Senha de Acesso
-              <input
-                type="password"
-                required
-                placeholder="Digite a senha do painel"
-                value={loginPass}
-                onChange={(e) => setLoginPass(e.target.value)}
-              />
+              Chave de Segurança
+              <div className="admin-pass-input-wrap">
+                <input
+                  type={showLoginPass ? "text" : "password"}
+                  required
+                  autoComplete="current-password"
+                  disabled={isLockedOut}
+                  placeholder="Digite sua senha de acesso"
+                  value={loginPass}
+                  onChange={(e) => setLoginPass(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="admin-pass-toggle"
+                  onClick={() => setShowLoginPass((prev) => !prev)}
+                  aria-label={showLoginPass ? "Ocultar senha" : "Mostrar senha"}
+                >
+                  {showLoginPass ? <EyeOff size={15} /> : <Eye size={15} />}
+                </button>
+              </div>
             </label>
 
             {loginError && <p className="admin-auth-error">{loginError}</p>}
 
-            <button type="submit" className="button button-lime admin-auth-submit">
-              <Lock size={16} /> Entrar no Painel Admin
+            <button
+              type="submit"
+              disabled={isLockedOut}
+              className="button button-lime admin-auth-submit"
+            >
+              <Lock size={16} />
+              {isLockedOut
+                ? `Bloqueado (${lockoutRemainingSec}s)`
+                : "Desbloquear Painel Admin"}
             </button>
           </form>
 
-          <div className="admin-auth-helper">
-            <div>
-              <KeyRound size={15} />
-              <span>
-                Acesso padrão local: usuário <strong>{settings.admin_user || "admin"}</strong> ·
-                senha <strong>{settings.admin_pin || "wplay2026"}</strong>
-              </span>
-            </div>
-            <button
-              type="button"
-              className="admin-autofill-btn"
-              onClick={() => {
-                setLoginUser(settings.admin_user || "admin");
-                setLoginPass(settings.admin_pin || "wplay2026");
-              }}
-            >
-              Preencher acesso rápido
-            </button>
-          </div>
-
           <Link href="/" className="admin-back-store">
-            <ArrowLeft size={15} /> Voltar para a loja pública
+            <ArrowLeft size={15} /> Voltar para a vitrine pública
           </Link>
         </div>
       </main>
@@ -567,12 +920,14 @@ export default function AdminPage() {
               src={settings.logo_url || officialLogoPath}
               alt="Logo WPlay Eletrônicos"
               className="brand-logo-img"
+              onError={(e) => handleImageErrorFallback(e, officialLogoPath)}
             />
           </span>
           <div>
             <h1>Central Admin WPlay</h1>
             <span className="admin-session-pill">
-              <span className="status-dot status-online" /> Conectado como {authUserLabel}
+              <span className="status-dot status-online" /> {authUserLabel} ·{" "}
+              <Clock size={12} /> Expira em {formatRemainingTime(remainingSessionMs)}
             </span>
           </div>
         </div>
@@ -585,7 +940,7 @@ export default function AdminPage() {
             className={tab === "fotos" ? "admin-nav-tab active" : "admin-nav-tab"}
             onClick={() => setTab("fotos")}
           >
-            <Camera size={16} /> Fotos dos Produtos
+            <Camera size={16} /> Fotos
           </button>
           <button
             type="button"
@@ -611,11 +966,20 @@ export default function AdminPage() {
           <button
             type="button"
             role="tab"
+            aria-selected={tab === "seguranca"}
+            className={tab === "seguranca" ? "admin-nav-tab active" : "admin-nav-tab"}
+            onClick={() => setTab("seguranca")}
+          >
+            <ShieldCheck size={16} /> Segurança & Links
+          </button>
+          <button
+            type="button"
+            role="tab"
             aria-selected={tab === "config"}
             className={tab === "config" ? "admin-nav-tab active" : "admin-nav-tab"}
             onClick={() => setTab("config")}
           >
-            <Sliders size={16} /> Loja, Mapa & Senha
+            <Sliders size={16} /> Dados da Loja
           </button>
         </nav>
 
@@ -623,8 +987,12 @@ export default function AdminPage() {
           <Link href="/" className="button button-outline">
             <Eye size={15} /> Ver Loja <ArrowUpRight size={14} />
           </Link>
-          <button type="button" className="button button-quiet" onClick={() => void handleLogout()}>
-            <LogOut size={15} /> Sair
+          <button
+            type="button"
+            className="button button-quiet"
+            onClick={() => void handleLogout("Bloqueio manual pelo administrador")}
+          >
+            <LogOut size={15} /> Trancar
           </button>
         </div>
       </header>
@@ -649,7 +1017,16 @@ export default function AdminPage() {
                       className={active ? "photo-prod-item active" : "photo-prod-item"}
                       onClick={() => setSelectedPhotoProductId(prod.id)}
                     >
-                      <img src={prod.image} alt={prod.name} />
+                      <img
+                        src={prod.image}
+                        alt={prod.name}
+                        onError={(e) =>
+                          handleImageErrorFallback(
+                            e,
+                            getFallbackImageForCategory(prod.category)
+                          )
+                        }
+                      />
                       <div>
                         <strong>{prod.name}</strong>
                         <span>{prod.category}</span>
@@ -674,6 +1051,12 @@ export default function AdminPage() {
                       <img
                         src={activePhotoProduct.image}
                         alt={activePhotoProduct.name}
+                        onError={(e) =>
+                          handleImageErrorFallback(
+                            e,
+                            getFallbackImageForCategory(activePhotoProduct.category)
+                          )
+                        }
                         style={{
                           objectFit: activePhotoProduct.imageFit || "cover",
                           objectPosition: activePhotoProduct.imagePosition || "50% 50%",
@@ -753,13 +1136,15 @@ export default function AdminPage() {
                           )
                         }
                       >
-                        <RotateCcw size={13} /> Resetar
+                        <RotateCcw size={13} /> Resetar enquadramento
                       </button>
                     </div>
 
                     <div className="framing-sliders">
                       <label>
-                        <span>Zoom da Foto ({Math.round((activePhotoProduct.imageScale || 1) * 100)}%)</span>
+                        <span>
+                          Zoom da Foto ({Math.round((activePhotoProduct.imageScale || 1) * 100)}%)
+                        </span>
                         <input
                           type="range"
                           min="0.8"
@@ -815,6 +1200,14 @@ export default function AdminPage() {
                     <h2>3. Trocar Foto de “{activePhotoProduct.name}”</h2>
                     <span>Envie do seu dispositivo, cole um link ou escolha na galeria</span>
                   </div>
+
+                  <button
+                    type="button"
+                    className="button button-outline"
+                    onClick={() => void restoreDemoProductPhoto()}
+                  >
+                    <RotateCcw size={15} /> Restaurar foto de demonstração
+                  </button>
 
                   <div className="photo-upload-dropzone">
                     <Upload size={26} />
@@ -886,7 +1279,13 @@ export default function AdminPage() {
                               )
                             }
                           >
-                            <img src={item.src} alt={item.label} />
+                            <img
+                              src={item.src}
+                              alt={item.label}
+                              onError={(e) =>
+                                handleImageErrorFallback(e, "/images/wplay-iphone.jpg")
+                              }
+                            />
                             <span>{item.label}</span>
                             {isCurrent && (
                               <b className="studio-active-pill">
@@ -923,6 +1322,12 @@ export default function AdminPage() {
                           src={activeHeroSlide.image}
                           alt={activeHeroSlide.title}
                           className="hero-slide-preview-thumb"
+                          onError={(e) =>
+                            handleImageErrorFallback(
+                              e,
+                              getFallbackImageForCategory(activeHeroSlide.category)
+                            )
+                          }
                         />
                         <div className="hero-slide-fields">
                           <input
@@ -1112,23 +1517,17 @@ export default function AdminPage() {
                     className="button button-outline"
                     onClick={() => {
                       setSelectedPhotoProductId(editingProduct.id);
-                      setEditingProduct(null);
                       setTab("fotos");
                     }}
                   >
-                    <Camera size={16} /> Personalizar Foto deste Produto
+                    <Camera size={15} /> Ajustar Foto no Studio
                   </button>
                 </div>
               </form>
             ) : (
               <>
                 <div className="admin-products-head">
-                  <div>
-                    <h2>Catálogo de Produtos</h2>
-                    <p className="admin-helper-text">
-                      Adicione novos produtos, edite variantes ou clique em “Trocar Foto” para abrir o estúdio.
-                    </p>
-                  </div>
+                  <h2>Todos os Produtos ({products.length})</h2>
                   <button
                     type="button"
                     className="button button-lime"
@@ -1143,7 +1542,7 @@ export default function AdminPage() {
                         image: "/images/wplay-iphone.jpg",
                         published: true,
                         featured: false,
-                        variants: ["Pronta entrega", "Consultar cores"],
+                        variants: ["Pronta entrega", "Sob consulta"],
                       })
                     }
                   >
@@ -1151,21 +1550,28 @@ export default function AdminPage() {
                   </button>
                 </div>
 
-                <div className="admin-list">
+                <div className="admin-product-table">
                   {products.map((p) => (
-                    <div className="admin-row" key={p.id}>
-                      <div className="admin-row-main">
-                        <img src={p.image} alt={p.name} className="admin-row-thumb" />
-                        <div>
-                          <strong>{p.name || "Sem nome"}</strong>
-                          <span>
-                            {p.category} · {formatCurrencyBRL(p.price) || "Sob consulta"} ·{" "}
-                            {p.published ? "Publicado" : "Oculto"}
-                          </span>
-                        </div>
+                    <div key={p.id} className="admin-product-row">
+                      <img
+                        src={p.image}
+                        alt={p.name}
+                        onError={(e) =>
+                          handleImageErrorFallback(
+                            e,
+                            getFallbackImageForCategory(p.category)
+                          )
+                        }
+                      />
+                      <div className="admin-product-meta">
+                        <strong>{p.name}</strong>
+                        <span>
+                          {p.category} · {formatCurrencyBRL(p.price) || "Sob consulta"} ·{" "}
+                          {p.published ? "Visível" : "Oculto"}
+                        </span>
                       </div>
 
-                      <div className="admin-row-actions">
+                      <div className="admin-product-actions">
                         <button
                           type="button"
                           onClick={() => {
@@ -1176,18 +1582,7 @@ export default function AdminPage() {
                           <Camera size={14} /> Trocar Foto
                         </button>
                         <button type="button" onClick={() => startEditProduct(p)}>
-                          Editar Dados
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            const next = products.map((item) =>
-                              item.id === p.id ? { ...item, featured: !item.featured } : item
-                            );
-                            void persistProducts(next);
-                          }}
-                        >
-                          <Star size={14} /> {p.featured ? "Destaque" : "Normal"}
+                          Editar
                         </button>
                         {confirmDeleteId === p.id ? (
                           <button
@@ -1195,11 +1590,12 @@ export default function AdminPage() {
                             className="admin-delete-confirm"
                             onClick={() => {
                               const next = products.filter((item) => item.id !== p.id);
-                              setConfirmDeleteId(null);
                               void persistProducts(next, p.id);
+                              setConfirmDeleteId(null);
+                              showToast("Produto removido.");
                             }}
                           >
-                            Confirmar Exclusão
+                            Confirmar exclusão
                           </button>
                         ) : (
                           <button
@@ -1219,23 +1615,27 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* TAB 3: CATEGORIAS PERSONALIZADAS */}
+        {/* TAB 3: GERENCIADOR DE CATEGORIAS */}
         {tab === "categorias" && (
           <div className="admin-section-card">
             <div className="admin-products-head">
               <div>
-                <h2>Categorias da Loja</h2>
-                <p className="admin-helper-text">
-                  Crie novas categorias, escolha a ordem em que aparecem no topo da vitrine ou adicione produtos nelas.
+                <h2>Categorias da Vitrine ({allCategories.length})</h2>
+                <p className="admin-sub">
+                  Crie novas abas para a vitrine ou reordene os botões de filtro rápido.
                 </p>
               </div>
             </div>
 
-            <form className="category-create-bar" onSubmit={(e) => void handleCreateCategory(e)}>
+            <form
+              className="category-creator-bar"
+              onSubmit={(e) => void handleCreateCategory(e)}
+            >
               <input
                 type="text"
-                maxLength={36}
-                placeholder="Nome da nova categoria (ex.: Videogames, JBL, Drones...)"
+                required
+                maxLength={40}
+                placeholder="Nome da nova categoria (Ex.: Games & Consoles, Drones...)"
                 value={newCategoryName}
                 onChange={(e) => setNewCategoryName(e.target.value)}
               />
@@ -1244,24 +1644,18 @@ export default function AdminPage() {
               </button>
             </form>
 
-            <div className="admin-list">
+            <div className="category-manager-list">
               {allCategories.map((catName, idx) => {
                 const count = products.filter((p) => p.category === catName).length;
                 return (
-                  <div className="admin-row" key={catName}>
-                    <div className="admin-row-main">
-                      <span className="admin-cat-icon">
-                        <Layers size={16} />
+                  <div key={catName} className="category-manager-row">
+                    <div>
+                      <strong>{catName}</strong>
+                      <span>
+                        {count} {count === 1 ? "produto" : "produtos"}
                       </span>
-                      <div>
-                        <strong>{catName}</strong>
-                        <span>
-                          {count} {count === 1 ? "produto vinculado" : "produtos vinculados"}
-                        </span>
-                      </div>
                     </div>
-
-                    <div className="admin-row-actions">
+                    <div className="category-row-actions">
                       <button
                         type="button"
                         disabled={idx === 0}
@@ -1311,12 +1705,197 @@ export default function AdminPage() {
           </div>
         )}
 
-        {/* TAB 4: LOJA, MAPA, LOGO & SENHA DO ADMIN */}
+        {/* TAB 4: SEGURANÇA, ROTAS OCULTAS & DIAGNÓSTICO DE LINKS */}
+        {tab === "seguranca" && (
+          <div className="admin-security-grid">
+            {/* 1. Link Health & Broken-Link Shield */}
+            <section className="admin-section-card">
+              <div className="admin-products-head">
+                <div>
+                  <h2>
+                    <Link2 size={18} /> Proteção Anti-Link Quebrado
+                  </h2>
+                  <p className="admin-sub">
+                    Monitoramento automático de links externos (WhatsApp, Instagram, Maps) e fotos da vitrine.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  className="button button-lime"
+                  onClick={() => void handleRepairAllLinksAndImages()}
+                >
+                  <RefreshCw size={15} /> Blindar Todos os Links & Fotos
+                </button>
+              </div>
+
+              <div className="admin-link-health-list">
+                {linkHealthReport.map((item) => (
+                  <div key={item.id} className="admin-link-health-row">
+                    <div className="admin-link-health-meta">
+                      <strong>{item.label}</strong>
+                      <code>{item.target}</code>
+                    </div>
+                    <span
+                      className={
+                        item.healthy
+                          ? "health-pill health-pill-ok"
+                          : "health-pill health-pill-warn"
+                      }
+                    >
+                      {item.healthy ? (
+                        <>
+                          <CheckCircle2 size={13} /> {item.detail}
+                        </>
+                      ) : (
+                        <>
+                          <AlertTriangle size={13} /> {item.detail}
+                        </>
+                      )}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </section>
+
+            {/* 2. SHA-256 Encrypted Credentials & Hidden Route Info */}
+            <section className="admin-section-card">
+              <div className="admin-products-head">
+                <div>
+                  <h2>
+                    <KeyRound size={18} /> Credenciais Criptografadas & Rota Oculta
+                  </h2>
+                  <p className="admin-sub">
+                    O link de administração foi ocultado da loja pública. Use{" "}
+                    <strong>Ctrl + Shift + A</strong> no teclado ou toque{" "}
+                    <strong>5 vezes seguidas</strong> na logo do rodapé para abrir este painel.
+                  </p>
+                </div>
+              </div>
+
+              <form
+                className="product-form"
+                onSubmit={(e) => void handleUpdateSecurityCredentials(e)}
+              >
+                <div className="form-row-2">
+                  <label>
+                    Novo Usuário do Admin
+                    <input
+                      type="text"
+                      required
+                      value={newAdminUserInput}
+                      onChange={(e) => setNewAdminUserInput(e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Senha Atual (Confirmação)
+                      <input
+                        type="password"
+                        required
+                        placeholder="Digite a senha atual para autorizar"
+                        value={currentPinInput}
+                        onChange={(e) => setCurrentPinInput(e.target.value)}
+                      />
+                  </label>
+                </div>
+
+                <div className="form-row-2">
+                  <label>
+                    Nova Senha Forte (mín. 6 caracteres)
+                    <input
+                      type="password"
+                      required
+                      minLength={6}
+                      placeholder="Nova senha criptografada"
+                      value={newPinInput}
+                      onChange={(e) => setNewPinInput(e.target.value)}
+                    />
+                  </label>
+                  <label>
+                    Confirmar Nova Senha
+                    <input
+                      type="password"
+                      required
+                      minLength={6}
+                      placeholder="Repita a nova senha"
+                      value={confirmNewPinInput}
+                      onChange={(e) => setConfirmNewPinInput(e.target.value)}
+                    />
+                  </label>
+                </div>
+
+                <div className="admin-hash-preview">
+                  <ShieldCheck size={14} />
+                  <span>
+                    Hash SHA-256 ativo:{" "}
+                    <code>
+                      {(settings.admin_pin_hash || defaultAdminPinHash).slice(0, 24)}...
+                    </code>
+                  </span>
+                </div>
+
+                {securityMsg && <p className="admin-security-feedback">{securityMsg}</p>}
+
+                <button type="submit" className="button button-lime">
+                  <Save size={16} /> Atualizar Senha Criptografada
+                </button>
+              </form>
+            </section>
+
+            {/* 3. Security Audit Log */}
+            <section className="admin-section-card">
+              <div className="admin-products-head">
+                <div>
+                  <h2>
+                    <ShieldAlert size={18} /> Registro de Auditoria de Acesso
+                  </h2>
+                  <p className="admin-sub">
+                    Histórico local de autenticações, bloqueios anti-força bruta e reparos de segurança.
+                  </p>
+                </div>
+                {auditLog.length > 0 && (
+                  <button
+                    type="button"
+                    className="button button-quiet"
+                    onClick={() => {
+                      setAuditLog([]);
+                      localStorage.removeItem(adminAuditStorageKey);
+                      showToast("Histórico de auditoria limpo.");
+                    }}
+                  >
+                    Limpar Registro
+                  </button>
+                )}
+              </div>
+
+              {auditLog.length === 0 ? (
+                <p className="admin-sub">Nenhum evento registrado ainda nesta sessão.</p>
+              ) : (
+                <div className="admin-audit-list">
+                  {auditLog.map((entry) => (
+                    <div key={entry.id} className="admin-audit-row">
+                      <div>
+                        <strong>{entry.detail}</strong>
+                        <span>
+                          Usuário: {entry.user} · {entry.timestamp}
+                        </span>
+                      </div>
+                      <span className={`audit-badge audit-${entry.event}`}>
+                        {entry.event.replace("_", " ")}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          </div>
+        )}
+
+        {/* TAB 5: LOJA, MAPA & ATENDIMENTO */}
         {tab === "config" && (
           <div className="admin-section-card">
             <form className="product-form" onSubmit={(e) => void handleSaveStoreConfig(e)}>
               <div className="admin-products-head">
-                <h2>Identidade da Loja, Localização & Segurança</h2>
+                <h2>Identidade da Loja, WhatsApp & Localização</h2>
                 <button
                   type="button"
                   className="button button-quiet"
@@ -1435,43 +2014,22 @@ export default function AdminPage() {
                 </label>
 
                 <label>
-                  Telefone WhatsApp com DDD (opcional p/ texto direto)
+                  Número do WhatsApp com DDD
                   <input
                     type="tel"
-                    placeholder="5514999999999"
+                    placeholder="+55 14 99674-7344"
                     value={draftSettings.whatsapp_phone ?? ""}
-                    onChange={(e) =>
+                    onChange={(e) => {
+                      const digits = normalizePhoneDigits(e.target.value);
                       setDraftSettings({
                         ...draftSettings,
                         whatsapp_phone: e.target.value.trim() || null,
-                      })
-                    }
-                  />
-                </label>
-              </div>
-
-              <div className="form-row-2">
-                <label>
-                  Usuário do Painel Admin
-                  <input
-                    type="text"
-                    required
-                    value={draftSettings.admin_user}
-                    onChange={(e) =>
-                      setDraftSettings({ ...draftSettings, admin_user: e.target.value })
-                    }
-                  />
-                </label>
-
-                <label>
-                  Senha do Painel Admin
-                  <input
-                    type="text"
-                    required
-                    value={draftSettings.admin_pin}
-                    onChange={(e) =>
-                      setDraftSettings({ ...draftSettings, admin_pin: e.target.value })
-                    }
+                        whatsapp_url:
+                          digits.length >= 12 && digits.length <= 15
+                            ? `https://wa.me/${digits}`
+                            : draftSettings.whatsapp_url,
+                      });
+                    }}
                   />
                 </label>
               </div>

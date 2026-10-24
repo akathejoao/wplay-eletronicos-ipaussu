@@ -170,7 +170,7 @@ export default function AdminPage() {
   draftStateRef.current = { settings, draftSettings, hoursTextarea, editingProduct };
 
   const loadCloudData = useCallback(async (background = false) => {
-    if (!supabase) return { success: false, error: "Conexão Supabase indisponível." };
+    if (!supabase) return { success: false, error: "Conexão com a loja indisponível." };
     setCloudDataLoaded(false);
     setCloudLoadError("");
     try {
@@ -306,7 +306,7 @@ export default function AdminPage() {
       setRemainingSessionMs(SESSION_TTL_MS);
       setIsAuthenticated(true);
       setLoginPass("");
-      appendAuditEntry("login_success", label, "Autenticação Supabase Auth e proprietário verificado");
+      appendAuditEntry("login_success", label, "Autenticação segura e administrador verificado");
       return true;
       } catch (caught) {
         await supabase.auth.signOut();
@@ -427,7 +427,7 @@ export default function AdminPage() {
       if (!cancelled) setAuthChecking(false);
     }).catch((caught) => {
       if (!cancelled) {
-        setLoginError(caught instanceof Error ? caught.message : "Não foi possível verificar a sessão Supabase.");
+        setLoginError(caught instanceof Error ? caught.message : "Não foi possível verificar a sessão.");
         setAuthChecking(false);
       }
     });
@@ -450,7 +450,7 @@ export default function AdminPage() {
           await supabase.auth.signOut();
           setIsAuthenticated(false);
           setCloudDataLoaded(false);
-          setLoginError("Sua sessão Supabase expirou. Entre novamente.");
+          setLoginError("Sua sessão expirou. Entre novamente.");
           return;
         }
         const { data: owner, error: ownerError } = await supabase
@@ -635,7 +635,7 @@ export default function AdminPage() {
     try {
     const { data: authData, error: authError } = await supabase.auth.getUser();
     if (authError || !authData.user) {
-      showToast("Sessão Supabase indisponível. Entre novamente para salvar.");
+      showToast("Sessão indisponível. Entre novamente para salvar.");
       return false;
     }
     const { data: owner, error: ownerError } = await supabase
@@ -670,7 +670,7 @@ export default function AdminPage() {
           ? await supabase.from("products").delete().eq("id", deletedId)
           : await supabase.from("products").upsert(next.map(productToDatabase));
         if (result.error) {
-          showToast(`Falha ao salvar produtos no Supabase: ${result.error.message}`);
+          showToast(`Falha ao salvar produtos online: ${result.error.message}`);
           return false;
         }
         setProducts(next);
@@ -678,15 +678,15 @@ export default function AdminPage() {
       } catch (caught) {
         showToast(
           caught instanceof Error
-            ? `Falha ao salvar produtos no Supabase: ${caught.message}`
-            : "Falha ao salvar produtos no Supabase."
+            ? `Falha ao salvar produtos online: ${caught.message}`
+            : "Falha ao salvar produtos online."
         );
         return false;
       }
     }
 
     if (!localDemoMode) {
-      showToast("Configuração do Supabase ausente. O modo local só funciona neste computador.");
+      showToast("Configuração online indisponível. O modo local só funciona neste computador.");
       return false;
     }
     try {
@@ -709,14 +709,14 @@ export default function AdminPage() {
           .from("store_settings")
           .upsert(settingsToDatabase(normalized));
         if (error) {
-          showToast(`Falha ao salvar configurações no Supabase: ${error.message}`);
+          showToast(`Falha ao salvar configurações online: ${error.message}`);
           return false;
         }
       } catch (caught) {
         showToast(
           caught instanceof Error
-            ? `Falha ao salvar configurações no Supabase: ${caught.message}`
-            : "Falha ao salvar configurações no Supabase."
+            ? `Falha ao salvar configurações online: ${caught.message}`
+            : "Falha ao salvar configurações online."
         );
         return false;
       }
@@ -726,7 +726,7 @@ export default function AdminPage() {
       return true;
     }
     if (!localDemoMode) {
-      showToast("Configuração do Supabase ausente. O modo local só funciona neste computador.");
+      showToast("Configuração online indisponível. O modo local só funciona neste computador.");
       return false;
     }
     try {
@@ -803,7 +803,7 @@ export default function AdminPage() {
       options: { emailRedirectTo: `${window.location.origin}/admin` },
     });
     if (error) {
-      setLoginError(`Não foi possível criar a conta Supabase: ${error.message}`);
+      setLoginError(`Não foi possível criar a conta WPlay: ${error.message}`);
       return;
     }
     sessionStorage.setItem(adminAuthFlowStorageKey, "signup");
@@ -859,7 +859,7 @@ export default function AdminPage() {
     setPasswordlessSession(false);
     sessionStorage.removeItem(adminAuthFlowStorageKey);
     setSecurityMsg("");
-    showToast("Senha da conta Supabase atualizada.");
+    showToast("Senha da conta WPlay atualizada.");
   };
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -869,7 +869,7 @@ export default function AdminPage() {
     if (supabase) {
       const email = loginUser.trim().toLowerCase();
       if (!email.includes("@") || !loginPass) {
-        setLoginError("Informe o e-mail e a senha da conta Supabase.");
+        setLoginError("Informe o e-mail e a senha da conta WPlay.");
         return;
       }
       const { data, error } = await supabase.auth.signInWithPassword({
@@ -877,7 +877,7 @@ export default function AdminPage() {
         password: loginPass,
       });
       if (error || !data.user) {
-        setLoginError(`Falha na autenticação Supabase: ${error?.message || "credenciais inválidas"}`);
+        setLoginError(`Não foi possível entrar: ${error?.message || "credenciais inválidas"}`);
         return;
       }
       sessionStorage.setItem(adminAuthFlowStorageKey, "password");
@@ -889,7 +889,7 @@ export default function AdminPage() {
     }
 
     if (!localDemoMode) {
-      setLoginError("Conexão do Supabase ausente. Configure URL e chave pública para habilitar o painel.");
+      setLoginError("O painel está temporariamente indisponível. Entre em contato com o responsável pela loja.");
       return;
     }
 
@@ -968,7 +968,7 @@ export default function AdminPage() {
     if (supabase) {
       if (!(await ensureCloudOwner())) return;
       if (newPinInput.length < 12) {
-        setSecurityMsg("Use pelo menos 12 caracteres para a senha da conta Supabase.");
+        setSecurityMsg("Use pelo menos 12 caracteres para a senha da conta WPlay.");
         return;
       }
       if (newPinInput !== confirmNewPinInput) {
@@ -981,24 +981,24 @@ export default function AdminPage() {
           password: currentPinInput,
         });
         if (verifyError) {
-          setSecurityMsg("A senha atual da conta Supabase está incorreta.");
+          setSecurityMsg("A senha atual da conta WPlay está incorreta.");
           return;
         }
       } else if (!passwordlessSession) {
-        setSecurityMsg("Informe a senha atual da conta Supabase para confirmar a alteração.");
+        setSecurityMsg("Informe a senha atual da conta WPlay para confirmar a alteração.");
         return;
       }
       const { error } = await supabase.auth.updateUser({ password: newPinInput });
       if (error) {
-        setSecurityMsg(`Não foi possível atualizar a senha da conta Supabase: ${error.message}`);
+        setSecurityMsg(`Não foi possível atualizar a senha da conta WPlay: ${error.message}`);
         return;
       }
       setCurrentPinInput("");
       setNewPinInput("");
       setConfirmNewPinInput("");
       setPasswordlessSession(false);
-      appendAuditEntry("credentials_updated", authUserLabel, "Senha da conta Supabase atualizada");
-      setSecurityMsg("Senha da conta Supabase atualizada com sucesso.");
+      appendAuditEntry("credentials_updated", authUserLabel, "Senha da conta WPlay atualizada");
+      setSecurityMsg("Senha da conta WPlay atualizada com sucesso.");
       return;
     }
     const verified = await verifyAdminCredentials(
@@ -1240,7 +1240,7 @@ export default function AdminPage() {
     return (
       <main className="admin-route-shell">
         <div className="admin-auth-card">
-          <h1>Definir senha da conta Supabase</h1>
+          <h1>Definir nova senha</h1>
           <p>Use pelo menos 12 caracteres para concluir a recuperação da conta de administrador.</p>
           <form className="admin-auth-form" onSubmit={(e) => void handleSetRecoveredPassword(e)}>
             <label>
@@ -1281,7 +1281,7 @@ export default function AdminPage() {
         <main className="admin-route-shell">
           <div className="admin-auth-card">
             <h1>Painel não configurado</h1>
-            <p>Conexão do Supabase ausente. Configure NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY.</p>
+            <p>O painel está temporariamente indisponível. Entre em contato com o responsável pela loja.</p>
             <Link href="/" className="admin-back-store">
               <ArrowLeft size={15} /> Voltar para a vitrine pública
             </Link>
@@ -1304,7 +1304,7 @@ export default function AdminPage() {
             </span>
             <div>
               <h1>Acesso Restrito · WPlay</h1>
-              <p>{settings.store_name} · {supabase ? "Conta protegida pelo Supabase Auth" : "Demonstração local"}</p>
+              <p>{settings.store_name} · {supabase ? "Acesso administrativo" : "Demonstração local"}</p>
             </div>
           </div>
 
@@ -1312,14 +1312,14 @@ export default function AdminPage() {
             <ShieldCheck size={15} />
             <span>
               {supabase
-                ? "Entre com o e-mail e a senha da conta Supabase vinculada a um convite de administrador."
+                ? "Entre com seu e-mail e senha para acessar o painel WPlay."
                 : "Demonstração local protegida por hash SHA-256 e sessão com expiração automática."}
             </span>
           </div>
 
           <form className="admin-auth-form" onSubmit={(e) => void handleLogin(e)}>
             <label>
-              {supabase ? "E-mail da conta Supabase" : "Identificação do Administrador"}
+              {supabase ? "E-mail" : "Identificação do Administrador"}
               <input
                 type={supabase ? "email" : "text"}
                 required
@@ -1332,7 +1332,7 @@ export default function AdminPage() {
             </label>
 
             <label>
-              {supabase ? "Senha da conta Supabase" : "Chave de Segurança"}
+              {supabase ? "Senha" : "Chave de Segurança"}
               <div className="admin-pass-input-wrap">
                 <input
                   type={showLoginPass ? "text" : "password"}
@@ -1391,7 +1391,7 @@ export default function AdminPage() {
                 </>
               )}
               <button type="button" className="button button-outline" onClick={() => void handleCreateAccount()}>
-                Primeiro acesso: criar conta Supabase
+                Primeiro acesso: criar conta
               </button>
               <button type="button" className="button button-outline" onClick={() => void handleSendPasswordRecovery()}>
                 Esqueci minha senha
@@ -2270,11 +2270,11 @@ export default function AdminPage() {
               <div className="admin-products-head">
                 <div>
                   <h2>
-                    <KeyRound size={18} /> {supabase ? "Conta Supabase & acesso da equipe" : "Credenciais locais & rota oculta"}
+                    <KeyRound size={18} /> {supabase ? "Sua conta & acesso da equipe" : "Credenciais locais & rota oculta"}
                   </h2>
                   <p className="admin-sub">
                     {supabase
-                      ? <>Conta conectada: <strong>{authUserLabel}</strong>. A senha é gerenciada pelo Supabase Auth.</>
+                      ? <>Conta conectada: <strong>{authUserLabel}</strong>. Sua conta de acesso ao painel WPlay.</>
                       : <>O link de administração foi ocultado da loja pública. Use <strong>Ctrl + Shift + A</strong> no teclado ou toque <strong>5 vezes seguidas</strong> na logo do rodapé para abrir este painel.</>}
                   </p>
                 </div>
@@ -2287,11 +2287,11 @@ export default function AdminPage() {
                     onSubmit={(e) => void handleUpdateSecurityCredentials(e)}
                   >
                     <p className="admin-sub">
-                      Altere a senha da conta Supabase. Confirme a senha atual; deixe esse campo vazio somente se entrou por código ou link de recuperação.
+                      Altere a senha da conta WPlay. Confirme a senha atual; deixe esse campo vazio somente se entrou por código ou link de recuperação.
                     </p>
                     <div className="form-row-2">
                       <label>
-                        Senha atual da conta Supabase
+                        Senha atual da conta WPlay
                         <input
                           type="password"
                           required={!passwordlessSession}
@@ -2326,7 +2326,7 @@ export default function AdminPage() {
                     </label>
                     {securityMsg && <p className="admin-security-feedback">{securityMsg}</p>}
                     <button type="submit" className="button button-lime">
-                      <Save size={16} /> Atualizar senha Supabase
+                      <Save size={16} /> Atualizar senha
                     </button>
                   </form>
                   <AdminAccessManager supabase={supabase} />

@@ -1,0 +1,25 @@
+{
+  "name": "WPlay Eletrônicos & Smart",
+  "short_name": "WPlay",
+  "description": "Smartphones, mobilidade elétrica, perfumes importados e som premium em Ipaussu - SP.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#060809",
+  "theme_color": "#060809",
+  "orientation": "portrait-primary",
+  "lang": "pt-BR",
+  "icons": [
+    {
+      "src": "/images/wplay-logo-official.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/images/wplay-logo-official.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

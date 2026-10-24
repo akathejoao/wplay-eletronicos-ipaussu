@@ -1,14 +1,39 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import "./storefront.css";
 import "./atmosphere.css";
 
 export const metadata: Metadata = {
-  icons: { icon: "/images/wplay-logo-official.png" },
+  manifest: "/manifest.json",
+  icons: {
+    icon: "/images/wplay-logo-official.png",
+    apple: "/images/wplay-logo-official.png",
+  },
   title: "WPlay Eletrônicos | Ipaussu",
-  description: "Eletrônicos, mobilidade e acessórios em Ipaussu. Consulte a WPlay pelo WhatsApp.",
+  description: "Eletrônicos, mobilidade e acessórios em Ipaussu. App e catálogo interativo WPlay.",
+  appleWebApp: {
+    capable: true,
+    statusBarStyle: "black-translucent",
+    title: "WPlay",
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#060809",
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  viewportFit: "cover",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
-  return <html lang="pt-BR"><body>{children}</body></html>;
+  return (
+    <html lang="pt-BR">
+      <head>
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="mobile-web-app-capable" content="yes" />
+      </head>
+      <body>{children}</body>
+    </html>
+  );
 }

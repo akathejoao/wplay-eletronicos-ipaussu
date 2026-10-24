@@ -1486,3 +1486,567 @@
     scroll-behavior: auto !important;
   }
 }
+
+
+/* ==========================================================================
+   PWA & APP FEATURES: INSTALL BANNER, PUSH NOTIFICATIONS, STOCK & CRM
+   ========================================================================== */
+
+/* PWA Install Banner */
+.pwa-install-banner {
+  position: sticky;
+  top: 0;
+  z-index: 99;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 18px;
+  background: linear-gradient(90deg, rgba(8, 28, 18, 0.96), rgba(15, 45, 28, 0.96));
+  border-bottom: 1px solid rgba(199, 244, 80, 0.28);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  color: #f3f6ef;
+  font-size: 13px;
+  box-shadow: 0 4px 18px rgba(0, 0, 0, 0.35);
+}
+
+.pwa-banner-content {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: #d1e2cb;
+}
+
+.pwa-banner-content svg {
+  color: #c7f450;
+  flex-shrink: 0;
+}
+
+.pwa-banner-content strong {
+  color: #ffffff;
+}
+
+.pwa-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pwa-btn-install {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: #c7f450;
+  color: #061108;
+  font-size: 12px;
+  font-weight: 700;
+  border: 0;
+  cursor: pointer;
+  transition: transform 0.18s ease, filter 0.18s ease;
+}
+
+.pwa-btn-install:hover {
+  filter: brightness(1.1);
+  transform: translateY(-1px);
+}
+
+.pwa-btn-dismiss {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: #9fb296;
+  border: 0;
+  cursor: pointer;
+}
+
+.pwa-btn-dismiss:hover {
+  background: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+}
+
+/* Push Notification Activation in Header */
+.header-push-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: rgba(15, 36, 24, 0.85);
+  border: 1px solid rgba(172, 233, 122, 0.22);
+  color: #c4d3bc;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.header-push-btn:hover {
+  border-color: rgba(199, 244, 80, 0.5);
+  color: #ffffff;
+}
+
+.header-push-btn.header-push-active {
+  background: rgba(199, 244, 80, 0.12);
+  border-color: rgba(199, 244, 80, 0.35);
+  color: #c7f450;
+}
+
+/* Stock Badges & Real Pricing */
+.product-stock-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 4px;
+}
+
+.stock-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.stock-badge.stock-ready {
+  background: rgba(30, 230, 159, 0.14);
+  border: 1px solid rgba(30, 230, 159, 0.32);
+  color: #1ee69f;
+}
+
+.stock-badge.stock-available {
+  background: rgba(199, 244, 80, 0.12);
+  border: 1px solid rgba(199, 244, 80, 0.28);
+  color: #c7f450;
+}
+
+.stock-badge.stock-low {
+  background: rgba(245, 158, 11, 0.14);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  color: #f59e0b;
+}
+
+.stock-badge.stock-out {
+  background: rgba(239, 68, 68, 0.14);
+  border: 1px solid rgba(239, 68, 68, 0.32);
+  color: #f87171;
+}
+
+.price-pix-wrap {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.price-badge-pix {
+  display: inline-block;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: rgba(199, 244, 80, 0.18);
+  color: #c7f450;
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.product-installments-pill {
+  display: block;
+  font-size: 11px;
+  color: #9fb296;
+  margin-top: 2px;
+}
+
+/* Order Tray Customer Contact Field */
+.order-phone-input-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-block: 10px;
+}
+
+.order-phone-input-wrap label {
+  font-size: 12px;
+  color: #adc0a4;
+  font-weight: 500;
+}
+
+.order-phone-input-wrap input {
+  padding: 9px 12px;
+  border-radius: 8px;
+  background: rgba(7, 18, 12, 0.7);
+  border: 1px solid rgba(172, 233, 122, 0.22);
+  color: #f3f6ef;
+  font-size: 13px;
+  outline: none;
+}
+
+.order-phone-input-wrap input:focus {
+  border-color: #c7f450;
+}
+
+/* CRM Metrics & Leads in Admin */
+.crm-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 12px;
+  margin-top: 18px;
+  margin-bottom: 22px;
+}
+
+.crm-metric-card {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: rgba(15, 36, 24, 0.65);
+  border: 1px solid rgba(172, 233, 122, 0.16);
+}
+
+.crm-metric-num {
+  font-size: 24px;
+  font-weight: 800;
+  color: #f3f6ef;
+}
+
+.crm-metric-label {
+  font-size: 11.5px;
+  color: #9fb296;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.crm-color-novo { color: #1ee69f; }
+.crm-color-neg { color: #f59e0b; }
+.crm-color-fechado { color: #60a5fa; }
+.crm-color-val { color: #c7f450; }
+
+.crm-filter-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+
+.crm-search-box {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-radius: 8px;
+  background: rgba(7, 18, 12, 0.75);
+  border: 1px solid rgba(172, 233, 122, 0.2);
+  flex: 1;
+  min-width: 240px;
+  color: #9fb296;
+}
+
+.crm-search-box input {
+  background: transparent;
+  border: 0;
+  color: #f3f6ef;
+  font-size: 13px;
+  width: 100%;
+  outline: none;
+}
+
+.crm-filter-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.crm-chip {
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: rgba(15, 36, 24, 0.6);
+  border: 1px solid rgba(172, 233, 122, 0.15);
+  color: #adc0a4;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.crm-chip.active,
+.crm-chip:hover {
+  background: rgba(199, 244, 80, 0.14);
+  border-color: rgba(199, 244, 80, 0.4);
+  color: #c7f450;
+}
+
+.crm-leads-list {
+  display: grid;
+  gap: 14px;
+}
+
+.crm-lead-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+  border-radius: 14px;
+  background: rgba(12, 28, 19, 0.72);
+  border: 1px solid rgba(172, 233, 122, 0.18);
+  transition: border-color 0.2s ease;
+}
+
+.crm-lead-card:hover {
+  border-color: rgba(199, 244, 80, 0.35);
+}
+
+.crm-lead-card.status-novo {
+  border-left: 4px solid #1ee69f;
+}
+
+.crm-lead-card.status-em_negociacao {
+  border-left: 4px solid #f59e0b;
+}
+
+.crm-lead-card.status-fechado {
+  border-left: 4px solid #60a5fa;
+}
+
+.crm-lead-card.status-aguardando_reposicao {
+  border-left: 4px solid #c084fc;
+}
+
+.crm-lead-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.crm-lead-name {
+  display: block;
+  font-size: 15px;
+  color: #f3f6ef;
+}
+
+.crm-lead-phone {
+  font-size: 12.5px;
+  color: #9fb296;
+}
+
+.crm-status-select {
+  padding: 5px 10px;
+  border-radius: 8px;
+  font-size: 12px;
+  font-weight: 600;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  background: #091a10;
+  color: #f3f6ef;
+  cursor: pointer;
+}
+
+.crm-status-select.select-novo {
+  border-color: rgba(30, 230, 159, 0.4);
+  color: #1ee69f;
+}
+
+.crm-status-select.select-em_negociacao {
+  border-color: rgba(245, 158, 11, 0.4);
+  color: #f59e0b;
+}
+
+.crm-status-select.select-fechado {
+  border-color: rgba(96, 165, 250, 0.4);
+  color: #60a5fa;
+}
+
+.crm-status-select.select-aguardando_reposicao {
+  border-color: rgba(192, 132, 252, 0.4);
+  color: #c084fc;
+}
+
+.crm-lead-details {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(6, 14, 9, 0.6);
+}
+
+.crm-lead-product {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: #f3f6ef;
+  flex-wrap: wrap;
+}
+
+.crm-lead-product small {
+  color: #adc0a4;
+}
+
+.crm-detail-label {
+  font-size: 11px;
+  color: #7b8e73;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.crm-val-tag {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #c7f450;
+  margin-left: 6px;
+}
+
+.crm-lead-notes-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.crm-notes-text {
+  margin: 0;
+  font-size: 12.5px;
+  color: #c4d3bc;
+  line-height: 1.5;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.03);
+  cursor: pointer;
+  border: 1px dashed rgba(172, 233, 122, 0.15);
+}
+
+.crm-notes-text:hover {
+  border-color: rgba(199, 244, 80, 0.4);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.crm-notes-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.crm-notes-editor textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: #091a10;
+  border: 1px solid rgba(172, 233, 122, 0.3);
+  color: #f3f6ef;
+  font-size: 12.5px;
+}
+
+.crm-notes-editor-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.button-sm {
+  padding: 4px 10px !important;
+  font-size: 11px !important;
+  min-height: 28px !important;
+}
+
+.crm-lead-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 4px;
+}
+
+.crm-btn-whatsapp {
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/* Push Campaign Layout in Admin */
+.push-layout-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-top: 18px;
+}
+
+@media (max-width: 900px) {
+  .push-layout-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.push-composer-form h3,
+.push-history-panel h3 {
+  margin: 0 0 14px;
+  font-size: 15px;
+  color: #f3f6ef;
+}
+
+.push-form-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding-top: 8px;
+}
+
+.push-history-list {
+  display: grid;
+  gap: 12px;
+}
+
+.push-history-card {
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: rgba(12, 28, 19, 0.7);
+  border: 1px solid rgba(172, 233, 122, 0.16);
+}
+
+.push-history-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.push-history-head strong {
+  font-size: 13.5px;
+  color: #f3f6ef;
+}
+
+.push-history-date {
+  font-size: 11px;
+  color: #8fa286;
+}
+
+.push-history-body {
+  margin: 0 0 8px;
+  font-size: 12.5px;
+  color: #c4d3bc;
+  line-height: 1.45;
+}
+
+.push-history-stats {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 11.5px;
+  color: #9fb296;
+}

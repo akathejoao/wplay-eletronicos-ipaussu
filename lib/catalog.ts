@@ -8,6 +8,8 @@ export const settingsStorageKey = "wplay-settings-v6";
 export const adminSessionStorageKey = "wplay-admin-auth-v2";
 export const adminLockoutStorageKey = "wplay-admin-lockout-v1";
 export const adminAuditStorageKey = "wplay-admin-audit-v1";
+export const leadsStorageKey = "wplay-customer-leads-v1";
+export const pushSubsStorageKey = "wplay-push-subscribers-v1";
 
 // SHA-256 hash of default PIN ("wplay2026") with salt "wplay-ipaussu-v2:"
 export const defaultAdminPinHash =
@@ -20,6 +22,9 @@ export type Product = {
   description: string;
   badge: string;
   price: number | null;
+  pricePix?: number | null;
+  installments?: string | null; // e.g. "12x de R$ 389,00"
+  stockQuantity?: number | null; // null = pronta entrega sem contagem, > 0 quantidade, 0 = esgotado
   image: string;
   imageFit?: "cover" | "contain";
   imagePosition?: string;
@@ -27,6 +32,29 @@ export type Product = {
   published: boolean;
   featured: boolean;
   variants?: string[];
+};
+
+export type CustomerLead = {
+  id: string;
+  createdAt: string;
+  name: string;
+  whatsapp: string;
+  productName: string;
+  productId?: string;
+  variantChosen?: string;
+  notes?: string;
+  status: "novo" | "em_negociacao" | "fechado" | "aguardando_reposicao";
+  estimatedValue?: number | null;
+  lastFollowUpAt?: string;
+};
+
+export type PushNotificationCampaign = {
+  id: string;
+  createdAt: string;
+  title: string;
+  body: string;
+  targetUrl: string;
+  sentCount: number;
 };
 
 export type StudioPhoto = {
@@ -158,35 +186,44 @@ export const defaultVariantsByCategory: Record<string, string[]> = {
     "iPhone 17 Pro Max · 512 GB",
     "iPhone 18 Pro Max · 1 TB",
   ],
-  Mobilidade: ["Urbana", "Pneu Fat", "Duplo Assento", "Consultar Cores"],
-  Perfumes: ["Masculino", "Feminino", "Árabe / Importado", "100 ml"],
-  Áudio: ["Portátil", "Grave Turbo", "À prova d'água", "Party Box"],
-  Acessórios: ["USB-C Rápido", "MagSafe", "Fone Bluetooth", "Smartwatch"],
+  Mobilidade: ["60V 2000W", "60V 3000W Fat", "Edição Street"],
+  Perfumes: ["100ml Edição Especial", "Árabe Oudh & Âmbar", "Fragrância Designer"],
+  Áudio: ["Party Box Portátil", "Grave Pro 160W", "Caixa de Mesa Estéreo"],
+  Acessórios: ["Original / Turbo", "Blindagem MagSafe", "Carga Ultrarrápida USB-C"],
 };
 
-export function getDefaultVariantsForCategory(cat: string): string[] {
-  return defaultVariantsByCategory[cat] || ["Pronta entrega", "Sob encomenda", "Consultar cores"];
+export function getDefaultVariantsForCategory(category: string): string[] {
+  return (
+    defaultVariantsByCategory[category] || [
+      "Pronta entrega",
+      "Sob encomenda",
+      "Garantia WPlay",
+    ]
+  );
 }
 
-export function getFallbackImageForCategory(category?: string): string {
-  const lower = (category || "").toLocaleLowerCase("pt-BR");
-  if (lower.includes("mobil") || lower.includes("scooter")) return "/images/wplay-scooter.jpg";
-  if (lower.includes("perfum") || lower.includes("frag")) return "/images/wplay-perfume.jpg";
-  if (lower.includes("áudio") || lower.includes("audio") || lower.includes("som"))
-    return "/images/wplay-speaker.jpg";
-  if (lower.includes("acess") || lower.includes("watch") || lower.includes("relóg"))
-    return "/images/wplay-smartwatch.jpg";
-  return "/images/wplay-iphone.jpg";
+export const fallbackCategoryImages: Record<string, string> = {
+  Celulares: "/images/wplay-iphone.jpg",
+  Mobilidade: "/images/wplay-scooter.jpg",
+  Perfumes: "/images/wplay-perfume.jpg",
+  Áudio: "/images/wplay-speaker.jpg",
+  Acessórios: "/images/wplay-smartwatch.jpg",
+};
+
+export function getFallbackImageForCategory(category: string): string {
+  return fallbackCategoryImages[category] || "/images/wplay-hero.jpg";
 }
 
 export function handleImageErrorFallback(
-  event: SyntheticEvent<HTMLImageElement>,
-  fallbackSrc = "/images/wplay-iphone.jpg"
+  event: SyntheticEvent<HTMLImageElement, Event>,
+  category?: string
 ): void {
-  const img = event.currentTarget;
-  if (img.dataset.fallbackApplied === "true") return;
-  img.dataset.fallbackApplied = "true";
-  img.src = fallbackSrc;
+  const target = event.currentTarget;
+  const fallback = category ? getFallbackImageForCategory(category) : "/images/wplay-hero.jpg";
+  if (!target.dataset.hasFallbackTriggered) {
+    target.dataset.hasFallbackTriggered = "true";
+    target.src = fallback;
+  }
 }
 
 export function isValidImageSrc(src: string | null | undefined): boolean {
@@ -235,9 +272,12 @@ export const initialProducts: Product[] = [
     name: "iPhones & Smartphones",
     category: "Celulares",
     description:
-      "Escolha o modelo do iPhone 13 ao 18 Pro Max, memória compatível e acabamento, ou gire em 360° no estúdio interativo.",
-    badge: "Do 13 ao 18 Pro Max · Giro 3D",
-    price: null,
+      "Linha Apple do iPhone 13 ao 18 Pro Max. Selecione o modelo, memória, cor e condição desejada.",
+    badge: "Estoque em Ipaussu",
+    price: 4899,
+    pricePix: 4599,
+    installments: "12x de R$ 449,00 sem juros",
+    stockQuantity: 4,
     image: "/images/wplay-iphone.jpg",
     imageFit: "cover",
     imagePosition: "50% 50%",
@@ -255,78 +295,93 @@ export const initialProducts: Product[] = [
   },
   {
     id: "scooter-eletrica",
-    name: "Scooters Elétricas",
+    name: "Scooters Elétricas WPlay",
     category: "Mobilidade",
-    description: "Mobilidade elétrica urbana. Selecione o estilo para cotar.",
-    badge: "Mobilidade",
-    price: null,
+    description: "Mobilidade elétrica urbana com economia e estilo. Pneu fat, painel digital e freios a disco.",
+    badge: "Últimas 2 Unidades",
+    price: 11990,
+    pricePix: 10990,
+    installments: "18x de R$ 749,00",
+    stockQuantity: 2,
     image: "/images/wplay-scooter.jpg",
     imageFit: "cover",
     imagePosition: "50% 50%",
     imageScale: 1,
     published: true,
     featured: true,
-    variants: ["Pneu Fat", "Urbana Compacta", "Preto Fosco", "Consultar Cores"],
+    variants: ["60V 2000W Fat Urbana", "60V 3000W Street Power", "Edição Black Matte"],
   },
   {
     id: "perfumes-importados",
-    name: "Perfumes Importados",
+    name: "Perfumes Importados & Árabes",
     category: "Perfumes",
-    description: "Fragrâncias importadas e árabes sob consulta.",
-    badge: "Importados",
-    price: null,
+    description: "Fragrâncias originais de alta projeção e fixação duradoura. Originais com selo de procedência.",
+    badge: "Pronta Entrega",
+    price: 389,
+    pricePix: 349,
+    installments: "6x de R$ 64,80",
+    stockQuantity: 8,
     image: "/images/wplay-perfume.jpg",
     imageFit: "cover",
     imagePosition: "50% 50%",
     imageScale: 1,
     published: true,
     featured: true,
-    variants: ["Árabe", "Amadeirado", "Cítrico / Fresco", "100 ml"],
+    variants: ["Árabe Oudh Especial 100ml", "Designer Club de Nuit", "Oriental Vanilla Intenso"],
   },
   {
-    id: "caixas-som-audio",
-    name: "Caixas Bluetooth",
+    id: "caixas-som",
+    name: "Caixas de Som & Party Box",
     category: "Áudio",
-    description: "Som portátil com grave de presença.",
-    badge: "Grave Forte",
-    price: null,
+    description: "Graves de peso, iluminação dinâmica e resistência a respingos d'água.",
+    badge: "Pronta Entrega",
+    price: 1290,
+    pricePix: 1150,
+    installments: "10x de R$ 129,00",
+    stockQuantity: 5,
     image: "/images/wplay-speaker.jpg",
     imageFit: "cover",
     imagePosition: "50% 50%",
     imageScale: 1,
     published: true,
     featured: false,
-    variants: ["Portátil", "Party Speaker", "À prova d'água"],
+    variants: ["Party Box 160W LED", "Boombox Portátil Pro", "Soundbar Bluetooth"],
   },
   {
     id: "fones-acessorios",
     name: "Fones & Carregadores",
     category: "Acessórios",
-    description: "Áudio sem fio, cabos trançados e carga rápida.",
+    description: "Áudio sem fio de alta fidelidade, cancelamento ativo de ruído e carregadores ultra turbo homologados.",
     badge: "Originais & Turbo",
-    price: null,
+    price: 189,
+    pricePix: 159,
+    installments: "3x de R$ 63,00",
+    stockQuantity: 12,
     image: "/images/wplay-headphones.jpg",
     imageFit: "cover",
     imagePosition: "50% 50%",
     imageScale: 1,
     published: true,
     featured: false,
-    variants: ["Over-Ear ANC", "Fonte 20W+ USB-C", "Base MagSafe"],
+    variants: ["Fonte Turbo 35W Duo USB-C", "Cabo Trançado Reforçado 2m", "Headphone Over-Ear ANC"],
   },
   {
     id: "smartwatch-earbuds",
     name: "Smartwatches & In-Ear",
     category: "Acessórios",
-    description: "Relógios inteligentes e fones compactos para treino e rotina.",
+    description: "Relógios inteligentes ultra com monitoramento de saúde e fones compactos para treino e rotina.",
     badge: "Novidades",
-    price: null,
+    price: 349,
+    pricePix: 299,
+    installments: "6x de R$ 58,16",
+    stockQuantity: 6,
     image: "/images/wplay-smartwatch.jpg",
     imageFit: "cover",
     imagePosition: "50% 50%",
     imageScale: 1,
     published: true,
     featured: false,
-    variants: ["Caixa 45mm", "Caixa 49mm Ultra", "Earbuds Bluetooth"],
+    variants: ["Smartwatch Ultra 49mm Titânio", "Earbuds TWS Bluetooth 5.4", "Pulseira Alpine Loop"],
   },
 ];
 
@@ -376,16 +431,31 @@ export function normalizeProduct(raw: Partial<Product>, index: number): Product 
       : rawImage;
   const fallbackVariants = getDefaultVariantsForCategory(categoryName);
 
+  const parsedPrice =
+    raw.price !== null && raw.price !== undefined && !Number.isNaN(Number(raw.price))
+      ? Number(raw.price)
+      : null;
+
+  const parsedPricePix =
+    raw.pricePix !== null && raw.pricePix !== undefined && !Number.isNaN(Number(raw.pricePix))
+      ? Number(raw.pricePix)
+      : parsedPrice ? Math.round(parsedPrice * 0.92) : null;
+
+  const stockParsed =
+    raw.stockQuantity !== null && raw.stockQuantity !== undefined && !Number.isNaN(Number(raw.stockQuantity))
+      ? Number(raw.stockQuantity)
+      : null;
+
   return {
     id: raw.id || `item-${index}`,
     name: raw.name || "Produto WPlay",
     category: categoryName,
     description: raw.description || "Escolha sua opção e chame no WhatsApp.",
-    badge: typeof raw.badge === "string" ? raw.badge : "Sob consulta",
-    price:
-      raw.price !== null && raw.price !== undefined && !Number.isNaN(Number(raw.price))
-        ? Number(raw.price)
-        : null,
+    badge: typeof raw.badge === "string" && raw.badge.trim() ? raw.badge : "Sob consulta",
+    price: parsedPrice,
+    pricePix: parsedPricePix,
+    installments: typeof raw.installments === "string" && raw.installments.trim() ? raw.installments.trim() : parsedPrice ? `12x de ${formatCurrencyBRL(Math.round(parsedPrice / 12))}` : null,
+    stockQuantity: stockParsed,
     image: migratedImage,
     imageFit: raw.imageFit === "contain" ? "contain" : "cover",
     imagePosition:
@@ -439,54 +509,62 @@ export function normalizeSettings(raw?: Partial<StoreSettings> | null): StoreSet
     !savedWhatsAppUrl || savedWhatsAppUrl === "https://wa.me/message/AYTWXK3N666EC1"
       ? defaultStoreSettings.whatsapp_url
       : savedWhatsAppUrl;
-  const whatsappUrl = sanitizeExternalUrl(
+
+  const sanitizedWhatsApp = sanitizeExternalUrl(
     rawWhatsappCandidate,
     defaultStoreSettings.whatsapp_url
   ).url;
-
-  const whatsappPhone =
-    raw.whatsapp_phone?.trim() ||
-    (whatsappUrl === defaultStoreSettings.whatsapp_url
-      ? defaultStoreSettings.whatsapp_phone
-      : null);
-
-  const instagramUrl = sanitizeExternalUrl(
+  const sanitizedInstagram = sanitizeExternalUrl(
     raw.instagram_url,
     defaultStoreSettings.instagram_url
   ).url;
-
-  const mapsUrl = sanitizeExternalUrl(raw.maps_url, defaultStoreSettings.maps_url).url;
+  const sanitizedMaps = sanitizeExternalUrl(
+    raw.maps_url,
+    defaultStoreSettings.maps_url
+  ).url;
 
   return {
-    ...defaultStoreSettings,
-    ...raw,
     id: true,
+    store_name: raw.store_name?.trim() || defaultStoreSettings.store_name,
     logo_url: resolvedLogo,
-    whatsapp_url: whatsappUrl,
-    whatsapp_phone: whatsappPhone,
-    instagram_url: instagramUrl,
-    maps_url: mapsUrl,
-    custom_categories: Array.from(new Set(customCats)),
+    hero_headline:
+      raw.hero_headline?.trim() || defaultStoreSettings.hero_headline,
+    whatsapp_url: sanitizedWhatsApp,
+    whatsapp_phone:
+      raw.whatsapp_phone !== undefined
+        ? raw.whatsapp_phone
+        : defaultStoreSettings.whatsapp_phone,
+    instagram_url: sanitizedInstagram,
+    instagram_handle:
+      raw.instagram_handle?.trim() || defaultStoreSettings.instagram_handle,
+    city: raw.city?.trim() || defaultStoreSettings.city,
+    address_line:
+      raw.address_line?.trim() || defaultStoreSettings.address_line,
+    postal_code: raw.postal_code?.trim() || defaultStoreSettings.postal_code,
+    maps_url: sanitizedMaps,
     hours_lines: hours,
+    custom_categories: customCats,
     custom_gallery: gallery,
     hero_slides: heroSlides,
+    attendance_note:
+      raw.attendance_note?.trim() || defaultStoreSettings.attendance_note,
     admin_user: raw.admin_user?.trim() || defaultStoreSettings.admin_user,
-    admin_pin: raw.admin_pin?.trim() || "",
-    admin_pin_hash: raw.admin_pin_hash?.trim() || defaultAdminPinHash,
+    admin_pin: raw.admin_pin?.trim() || defaultStoreSettings.admin_pin,
+    admin_pin_hash:
+      raw.admin_pin_hash?.trim() || defaultStoreSettings.admin_pin_hash,
   };
 }
 
 export async function hashAdminSecret(secret: string): Promise<string> {
   const normalized = `wplay-ipaussu-v2:${secret.trim()}`;
-  if (typeof window !== "undefined" && window.crypto?.subtle) {
-    const encoded = new TextEncoder().encode(normalized);
-    const buffer = await window.crypto.subtle.digest("SHA-256", encoded);
-    return Array.from(new Uint8Array(buffer))
+  if (typeof crypto !== "undefined" && crypto.subtle) {
+    const enc = new TextEncoder();
+    const hashBuf = await crypto.subtle.digest("SHA-256", enc.encode(normalized));
+    return Array.from(new Uint8Array(hashBuf))
       .map((b) => b.toString(16).padStart(2, "0"))
       .join("");
   }
-  // Fallback deterministic hash if SubtleCrypto is unavailable
-  let h = 2166136261;
+  let h = 0x811c9dc5;
   for (let i = 0; i < normalized.length; i++) {
     h ^= normalized.charCodeAt(i);
     h = Math.imul(h, 16777619);
@@ -510,7 +588,6 @@ export async function verifyAdminCredentials(
   const trimmedPin = inputPin.trim();
   if (!trimmedPin) return false;
 
-  // Support legacy custom PIN if set, or SHA-256 hash comparison
   if (settings.admin_pin && settings.admin_pin.length > 0) {
     if (trimmedPin === settings.admin_pin) return true;
   }
@@ -519,7 +596,6 @@ export async function verifyAdminCredentials(
   const expectedHash = settings.admin_pin_hash || defaultAdminPinHash;
   if (inputHash === expectedHash) return true;
 
-  // Default fallback PIN check if hash hasn't been customized
   if (expectedHash === defaultAdminPinHash && trimmedPin === "wplay2026") {
     return true;
   }
@@ -598,7 +674,6 @@ export function buildWhatsAppHref(
 }
 
 export function formatCurrencyBRL(value: number | null | undefined): string | null {
-  if (value === null || value === undefined && Number.isNaN(Number(value))) return null;
   if (value === null || value === undefined || Number.isNaN(Number(value))) return null;
   return new Intl.NumberFormat("pt-BR", {
     style: "currency",

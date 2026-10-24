@@ -1,7 +1,7 @@
 import type { HeroSlideConfig, Product, StoreSettings, StudioPhoto } from "@/lib/catalog";
 
 export const productColumns =
-  "id,name,category,description,badge,price,image,image_fit,image_position,image_scale,published,featured,variants";
+  "id,name,category,description,badge,price,image,image_fit,image_position,image_scale,published,featured,variants,price_pix,installments,stock_quantity";
 
 export const settingsColumns =
   "id,store_name,logo_url,hero_headline,whatsapp_url,whatsapp_phone,instagram_url,instagram_handle,city,address_line,postal_code,maps_url,hours_lines,custom_categories,custom_gallery,hero_slides,attendance_note";
@@ -17,6 +17,9 @@ export function productFromDatabase(row: Record<string, unknown>): Partial<Produ
     description: row.description as string,
     badge: row.badge as string,
     price: row.price as number | null,
+    pricePix: row.price_pix as number | null | undefined,
+    installments: row.installments as string | null | undefined,
+    stockQuantity: row.stock_quantity as number | null | undefined,
     image: row.image as string,
     imageFit: row.image_fit === "contain" ? "contain" : "cover",
     imagePosition: row.image_position as string | undefined,
@@ -28,7 +31,7 @@ export function productFromDatabase(row: Record<string, unknown>): Partial<Produ
 }
 
 export function productToDatabase(product: Product) {
-  return {
+  const row: Record<string, unknown> = {
     id: product.id,
     name: product.name,
     category: product.category,
@@ -44,6 +47,12 @@ export function productToDatabase(product: Product) {
     variants: product.variants || [],
     updated_at: new Date().toISOString(),
   };
+
+  if (product.pricePix !== undefined) row.price_pix = product.pricePix;
+  if (product.installments !== undefined) row.installments = product.installments;
+  if (product.stockQuantity !== undefined) row.stock_quantity = product.stockQuantity;
+
+  return row;
 }
 
 export function settingsFromDatabase(row: Record<string, unknown>): Partial<StoreSettings> {

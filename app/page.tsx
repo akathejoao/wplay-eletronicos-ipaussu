@@ -3,13 +3,16 @@
 import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+  AlertCircle,
   ArrowRight,
   ArrowUpRight,
   AudioLines,
   BatteryCharging,
+  Bell,
   Check,
   Copy,
   CreditCard,
+  Download,
   ExternalLink,
   Eye,
   Layers,
@@ -17,8 +20,10 @@ import {
   Menu,
   Minus,
   Navigation,
+  PackageCheck,
   PackagePlus,
   Pause,
+  Phone,
   Play,
   Plus,
   RefreshCw,
@@ -68,13 +73,14 @@ import {
 } from "@/lib/iphone-models";
 import { Iphone3DStudio } from "@/app/components/Iphone3DStudio";
 import { Product3DStudio } from "@/app/components/Product3DStudio";
-import { isLocalDemoHost } from "@/lib/supabase";
+import { createClient, isLocalDemoHost } from "@/lib/supabase";
 import {
   productFromDatabase,
   settingsFromDatabase,
 } from "@/lib/catalog-repository";
 import { catalogCacheSeconds, catalogChangedEvent, publicCatalogStorageKey } from "@/lib/catalog-cache";
 import { StoreAtmosphere } from "@/app/components/StoreAtmosphere";
+import { saveCustomerLead } from "@/lib/catalog-crm";
 
 type FulfillmentMode = "Retirar na loja (Ipaussu)" | "Receber por entrega";
 type PaymentPreference = "PIX (À vista)" | "Cartão de crédito" | "Dar aparelho na troca";
@@ -171,6 +177,7 @@ function Brand({
 
 export default function Home() {
   const router = useRouter();
+  const supabase = useMemo(() => createClient(), []);
   const [products, setProducts] = useState<Product[]>([]);
   const [settings, setSettings] = useState<StoreSettings>(defaultStoreSettings);
   const [category, setCategory] = useState<string>("Tudo");
@@ -185,6 +192,14 @@ export default function Home() {
     process.env.NEXT_PUBLIC_SUPABASE_URL &&
     (process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)
   );
+
+  // PWA Install Prompt State
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [pwaInstalled, setPwaInstalled] = useState(false);
+  const [showPwaBanner, setShowPwaBanner] = useState(false);
+
+  // Web Push Notifications Subscription State
+  const [pushStatus, setPushStatus] = useState<"default" | "granted" | "denied">("default");
 
   // Scroll-Driven Atmosphere Stage
   const [atmosphereStage, setAtmosphereStage] = useState<AtmosphereStage>("hero");
@@ -234,10 +249,75 @@ export default function Home() {
   // Interactive Product Variants & Quick-Look Drawer
   const [chosenVariants, setChosenVariants] = useState<Record<string, string>>({
     "iphone-pro": "iPhone 16 Pro Max · 256 GB · Titânio-deserto (Lacrado)",
-    "scooter-eletrica": "Pneu Fat",
-    "perfumes-importados": "Árabe",
+    "scooter-eletrica": "60V 3000W Street Power",
+    "perfumes-importados": "Árabe Oudh Especial 100ml",
   });
   const [inspectedProduct, setInspectedProduct] = useState<Product | null>(null);
+
+  // PWA & Service Worker Registration
+  useEffect(() => {
+    if (typeof window !== "undefined" && "serviceWorker" in navigator) {
+      navigator.serviceWorker.register("/sw.js").catch(() => {});
+    }
+
+    if (typeof window !== "undefined" && "Notification" in window) {
+      setPushStatus(Notification.permission);
+    }
+
+    const handleBeforeInstall = (e: Event) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+      setShowPwaBanner(true);
+    };
+
+    const handleAppInstalled = () => {
+      setPwaInstalled(true);
+      setShowPwaBanner(false);
+      setNotice("App WPlay instalado com sucesso no seu dispositivo!");
+    };
+
+    window.addEventListener("beforeinstallprompt", handleBeforeInstall);
+    window.addEventListener("appinstalled", handleAppInstalled);
+
+    return () => {
+      window.removeEventListener("beforeinstallprompt", handleBeforeInstall);
+      window.removeEventListener("appinstalled", handleAppInstalled);
+    };
+  }, []);
+
+  const handleInstallAppClick = async () => {
+    if (!deferredPrompt) {
+      setNotice("Para instalar: toque em Compartilhar e selecione 'Adicionar à Tela de Início'.");
+      return;
+    }
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === "accepted") {
+      setShowPwaBanner(false);
+    }
+    setDeferredPrompt(null);
+  };
+
+  const handleRequestPushNotification = async () => {
+    if (!("Notification" in window)) {
+      setNotice("Seu navegador não suporta notificações diretas.");
+      return;
+    }
+    try {
+      const permission = await Notification.requestPermission();
+      setPushStatus(permission);
+      if (permission === "granted") {
+        setNotice("Notificações ativadas! Você receberá ofertas e novidades.");
+        if (navigator.serviceWorker && navigator.serviceWorker.controller) {
+          navigator.serviceWorker.controller.postMessage({ type: "SUBSCRIBED" });
+        }
+      } else {
+        setNotice("Notificações não foram autorizadas.");
+      }
+    } catch {
+      setNotice("Não foi possível ativar as notificações.");
+    }
+  };
 
   // Discrete Owner-Only Admin Route Shortcut (Ctrl+Shift+A or Ctrl+Alt+A)
   useEffect(() => {
@@ -297,7 +377,7 @@ export default function Home() {
     };
   }, [inspectedProduct]);
 
-  // Interactive Order Studio ("Central de Encomendas")
+  // Interactive Order Studio ("Central de Encomendas & Follow-up")
   const [orderQuantities, setOrderQuantities] = useState<Record<string, number>>({
     "iphone-pro": 1,
   });
@@ -312,6 +392,7 @@ export default function Home() {
   const [paymentPref, setPaymentPref] = useState<PaymentPreference>("PIX (À vista)");
   const [tradeInDevice, setTradeInDevice] = useState("");
   const [customerName, setCustomerName] = useState("");
+  const [customerWhatsApp, setCustomerWhatsApp] = useState("");
   const [customModelNote, setCustomModelNote] = useState("");
   const [customMessageOverride, setCustomMessageOverride] = useState<string | null>(null);
   const [showMessageEditor, setShowMessageEditor] = useState(false);
@@ -493,60 +574,45 @@ export default function Home() {
 
   useEffect(() => {
     const stageTargets: [string, AtmosphereStage][] = [
-      [".hero-stage-wrap", "hero"],
-      ["#vitrine", "vitrine"],
-      ["#encomenda", "encomenda"],
-      ["#localizacao", "localizacao"],
+      ["inicio", "hero"],
+      ["vitrine", "vitrine"],
+      ["encomenda", "encomenda"],
+      ["localizacao", "localizacao"],
     ];
-    const stageByElement = new Map<Element, AtmosphereStage>();
+
     const observer = new IntersectionObserver(
       (entries) => {
-        for (const entry of entries) {
-          if (!entry.isIntersecting) continue;
-          const stage = stageByElement.get(entry.target);
-          if (stage) {
-            document.documentElement.dataset.stage = stage;
-            setAtmosphereStage(stage);
-          }
+        const visible = entries
+          .filter((e) => e.isIntersecting)
+          .sort((a, b) => b.intersectionRatio - a.intersectionRatio)[0];
+        if (visible?.target?.id) {
+          const match = stageTargets.find(([id]) => id === visible.target.id);
+          if (match) setAtmosphereStage(match[1]);
         }
       },
-      { rootMargin: "-12% 0px -58% 0px" }
+      { threshold: [0.15, 0.45, 0.75] }
     );
-    for (const [selector, stage] of stageTargets) {
-      const element = document.querySelector(selector);
-      if (element) {
-        stageByElement.set(element, stage);
-        observer.observe(element);
-      }
+
+    for (const [id] of stageTargets) {
+      const el = document.getElementById(id);
+      if (el) observer.observe(el);
     }
     return () => observer.disconnect();
   }, []);
 
-  const stageSlides = useMemo(
-    () =>
-      settings.hero_slides && settings.hero_slides.length > 0
-        ? settings.hero_slides
-        : defaultHeroSlides,
-    [settings.hero_slides]
-  );
-
-  // Auto-advance Hero Stage when not hovered
-  useEffect(() => {
-    if (
-      stagePaused ||
-      stageSlides.length <= 1 ||
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    )
-      return;
-    const timer = window.setInterval(() => {
-      setActiveSlideIdx((prev) => (prev + 1) % stageSlides.length);
-    }, 4800);
-    return () => window.clearInterval(timer);
-  }, [stagePaused, stageSlides.length]);
-
+  const stageSlides = settings.hero_slides || defaultHeroSlides;
   const activeSlide = stageSlides[activeSlideIdx] || stageSlides[0];
 
+  useEffect(() => {
+    if (stagePaused) return;
+    const interval = window.setInterval(() => {
+      setActiveSlideIdx((curr) => (curr + 1) % stageSlides.length);
+    }, 4500);
+    return () => window.clearInterval(interval);
+  }, [stagePaused, stageSlides.length]);
+
   const handleStagePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    setStagePaused(true);
     const el = stageRef.current;
     if (!el || window.matchMedia("(prefers-reduced-motion: reduce)").matches) return;
     const rect = el.getBoundingClientRect();
@@ -573,7 +639,6 @@ export default function Home() {
     [products]
   );
 
-  // Merge owner's custom categories + any category used by a product
   const activeCategories = useMemo(() => {
     const fromSettings = settings.custom_categories?.length
       ? settings.custom_categories
@@ -599,11 +664,10 @@ export default function Home() {
       const extraIphoneSearch = isIphoneOrCellularProduct(p)
         ? iphoneLineup.map((m) => `${m.name} ${m.storages.join(" ")}`).join(" ")
         : "";
-      const haystack =
-        `${p.name} ${p.category} ${p.description} ${p.badge} ${(p.variants || []).join(" ")} ${extraIphoneSearch}`.toLocaleLowerCase(
-          "pt-BR"
-        );
-      return haystack.includes(normalizedQuery);
+      const searchHaystack = `${p.name} ${p.category} ${p.description} ${p.badge} ${
+        p.variants?.join(" ") || ""
+      } ${extraIphoneSearch}`.toLocaleLowerCase("pt-BR");
+      return searchHaystack.includes(normalizedQuery);
     });
   }, [publishedProducts, category, onlyFeatured, query]);
 
@@ -635,10 +699,10 @@ export default function Home() {
   const generatedOrderMessage = useMemo(() => {
     const greeting = customerName.trim()
       ? `Olá, WPlay! Aqui é ${customerName.trim()}.`
-      : "Olá, WPlay! Montei minha encomenda pelo site:";
+      : "Olá, WPlay! Montei minha encomenda pelo app/vitrine:";
 
     const catalogLines = selectedCatalogEntries.map(({ product, quantity, variant }) => {
-      const price = formatCurrencyBRL(product.price);
+      const price = formatCurrencyBRL(product.pricePix || product.price);
       const details = [variant, price].filter(Boolean).join(" · ");
       const qtyPrefix = quantity > 1 ? `${quantity}x ` : "";
       return `• ${qtyPrefix}${product.name}${details ? ` (${details})` : ""}`;
@@ -659,15 +723,17 @@ export default function Home() {
       paymentPref === "Dar aparelho na troca" && tradeInDevice.trim()
         ? `Pagamento: ${paymentPref} (Meu aparelho: ${tradeInDevice.trim()})`
         : `Pagamento: ${paymentPref}`;
+    const contactLine = customerWhatsApp.trim() ? `Contato WhatsApp: ${customerWhatsApp.trim()}` : "";
     const noteLine = customModelNote.trim() ? `Observação: ${customModelNote.trim()}` : "";
     const closingLine =
-      "Podem confirmar disponibilidade, valor atualizado e condições?";
+      "Podem confirmar disponibilidade no estoque, valor atualizado e condições?";
 
     return [
       greeting,
       allItemLines,
       fulfillmentLine,
       paymentLine,
+      contactLine,
       noteLine,
       closingLine,
     ]
@@ -675,6 +741,7 @@ export default function Home() {
       .join("\n");
   }, [
     customerName,
+    customerWhatsApp,
     selectedCatalogEntries,
     customItems,
     fulfillment,
@@ -786,7 +853,35 @@ export default function Home() {
     }
   };
 
+  // Automatically captures lead into CRM when customer initiates checkout
+  const recordCustomerLead = async (productHint?: Product, variantHint?: string) => {
+    try {
+      const topEntry = selectedCatalogEntries[0];
+      const prodName = productHint?.name || topEntry?.product.name || "Pedido pelo App WPlay";
+      const pId = productHint?.id || topEntry?.product.id;
+      const variant = variantHint || topEntry?.variant;
+      const estVal = productHint?.pricePix || productHint?.price || topEntry?.product.pricePix || topEntry?.product.price || null;
+
+      await saveCustomerLead(
+        {
+          name: customerName.trim() || "Cliente Interessado",
+          whatsapp: customerWhatsApp.trim() || settings.whatsapp_phone || "Não informado",
+          productName: prodName,
+          productId: pId,
+          variantChosen: variant,
+          notes: customModelNote.trim() || (tradeInDevice ? `Troca: ${tradeInDevice}` : "Iniciou contato via WhatsApp no app"),
+          status: "novo",
+          estimatedValue: estVal,
+        },
+        supabase
+      );
+    } catch {
+      // Best effort CRM capture
+    }
+  };
+
   const handleSendOrderToWhatsApp = async () => {
+    void recordCustomerLead();
     const { href, usesDirectText } = buildWhatsAppHref(settings, activeOrderMessage);
     const copied = await handleCopyMessage(activeOrderMessage);
     if (!usesDirectText) {
@@ -810,11 +905,14 @@ export default function Home() {
       : chosenVariants[product.id] ||
         (product.variants && product.variants[0]) ||
         getDefaultVariantsForCategory(product.category)[0];
-    const priceLabel = formatCurrencyBRL(product.price);
+    const priceLabel = formatCurrencyBRL(product.pricePix || product.price);
     const meta = [variant, priceLabel].filter(Boolean).join(" · ");
     const quickText = `Olá, WPlay! Quero comprar/consultar: ${product.name}${
       meta ? ` (${meta})` : ""
-    }. Está disponível para retirada ou entrega?`;
+    }. Está disponível para retirada ou entrega hoje?`;
+    
+    void recordCustomerLead(product, variant);
+
     const { href, usesDirectText } = buildWhatsAppHref(settings, quickText);
     if (!usesDirectText) {
       const copied = await handleCopyMessage(quickText);
@@ -853,29 +951,63 @@ export default function Home() {
   const activeLogoUrl = settings.logo_url || officialLogoPath;
 
   return (
-    <main id="inicio" className="storefront-clean" data-stage={atmosphereStage}>
-      {catalogLoadError && (
-        <div className="admin-security-banner" role="alert">
-          <ShieldCheck size={15} /> <span>{catalogLoadError}</span>
-        </div>
-      )}
+    <main className="storefront-clean" id="inicio">
       <StoreAtmosphere paused={ambientPaused} />
 
+      {/* PWA Install Notification Bar */}
+      {showPwaBanner && (
+        <div className="pwa-install-banner">
+          <div className="pwa-banner-content">
+            <Download size={16} />
+            <span>Instale o <strong>App WPlay</strong> no seu celular para receber ofertas exclusivas.</span>
+          </div>
+          <div className="pwa-banner-actions">
+            <button type="button" className="pwa-btn-install" onClick={() => void handleInstallAppClick()}>
+              Instalar App
+            </button>
+            <button type="button" className="pwa-btn-dismiss" onClick={() => setShowPwaBanner(false)} aria-label="Fechar">
+              <X size={15} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {catalogLoadError && (
+        <div className="catalog-status-bar" role="alert">
+          <AlertCircle size={15} />
+          <span>{catalogLoadError}</span>
+          <a
+            href={primaryWhatsAppHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => {
+              e.preventDefault();
+              void handleSendOrderToWhatsApp();
+            }}
+          >
+            Falar no WhatsApp
+          </a>
+        </div>
+      )}
+
+      {/* Header */}
       <header className="header">
         <Brand
           storeName={settings.store_name}
           city={settings.city}
           logoUrl={activeLogoUrl}
+          onSecretTrigger={() => router.push("/admin")}
         />
 
         <button
+          type="button"
           className="menu-toggle"
-          aria-label={menuOpen ? "Fechar menu" : "Abrir menu"}
           aria-expanded={menuOpen}
           aria-controls="primary-navigation"
+          aria-label={menuOpen ? "Fechar menu de navegação" : "Abrir menu de navegação"}
           onClick={() => setMenuOpen(!menuOpen)}
         >
-          {menuOpen ? <X size={20} /> : <Menu size={20} />}
+          {menuOpen ? <X size={22} /> : <Menu size={22} />}
         </button>
 
         <nav id="primary-navigation" className={menuOpen ? "nav nav-open" : "nav"}>
@@ -922,6 +1054,19 @@ export default function Home() {
         </nav>
 
         <div className="header-action-group">
+          {pushStatus !== "granted" && (
+            <button
+              type="button"
+              className="header-push-btn"
+              onClick={() => void handleRequestPushNotification()}
+              title="Ativar alertas de novidades e promoções"
+              aria-label="Ativar notificações"
+            >
+              <Bell size={14} />
+              <span>Receber Ofertas</span>
+            </button>
+          )}
+
           <button
             type="button"
             className="ambient-toggle"
@@ -978,7 +1123,7 @@ export default function Home() {
 
           <p className="hero-summary">
             iPhones do 13 ao 18 Pro Max, Scooters Elétricas, Perfumes e Áudio em
-            Ipaussu. Atendimento direto, sem fila e com avaliação imediata na troca.
+            Ipaussu. Preços reais atualizados, estoque a pronta entrega e avaliação imediata na troca.
           </p>
 
           <div className="hero-actions">
@@ -1009,7 +1154,7 @@ export default function Home() {
               <RefreshCw size={14} /> Seu usado vale na troca
             </span>
             <span className="trust-pill">
-              <Sparkles size={14} /> Condição especial no PIX
+              <Sparkles size={14} /> Desconto especial no PIX
             </span>
           </div>
         </div>
@@ -1078,19 +1223,19 @@ export default function Home() {
               onClick={() => {
                 const found =
                   publishedProducts.find((p) => p.id === activeSlide.id) ||
+                  publishedProducts.find((p) => p.category === activeSlide.category) ||
                   publishedProducts[0];
                 if (found) setInspectedProduct(found);
               }}
-              aria-label={`Espiar ${activeSlide.title} em 3D`}
             >
-              <Eye size={16} /> Espiar 3D
+              <Eye size={14} /> Espiar 3D
             </button>
           </div>
         </div>
       </section>
 
-      {/* Dynamic Category Dock */}
-      <section className="category-dock" aria-label="Atalhos rápidos de categorias">
+      {/* Quick Category Switcher */}
+      <section className="category-dock" aria-label="Filtrar por categoria">
         <button
           type="button"
           className={category === "Tudo" && !onlyFeatured ? "dock-tile active" : "dock-tile"}
@@ -1125,7 +1270,7 @@ export default function Home() {
       <section className="catalog-section" id="vitrine">
         <div className="catalog-bar">
           <h2>
-            Vitrine <span>WPlay.</span>
+            Vitrine & Estoque <span>WPlay.</span>
           </h2>
 
           <div className="catalog-controls">
@@ -1163,6 +1308,7 @@ export default function Home() {
             {visibleProducts.map((product) => {
               const isSelected = (orderQuantities[product.id] || 0) > 0;
               const priceFormatted = formatCurrencyBRL(product.price);
+              const pricePixFormatted = formatCurrencyBRL(product.pricePix);
               const isCellular = isIphoneOrCellularProduct(product);
               const variants =
                 product.variants && product.variants.length > 0
@@ -1172,12 +1318,17 @@ export default function Home() {
                 ? chosenVariants[product.id] || activeIphoneSummary
                 : chosenVariants[product.id] || variants[0];
 
+              const stockCount = product.stockQuantity;
+              const isOutOfStock = stockCount !== null && stockCount !== undefined && stockCount <= 0;
+              const isLowStock = stockCount !== null && stockCount !== undefined && stockCount > 0 && stockCount <= 3;
+
               return (
                 <article
                   key={product.id}
                   className={[
                     "product-card",
                     isSelected ? "product-card-selected" : "",
+                    isOutOfStock ? "product-card-out-stock" : "",
                   ]
                     .filter(Boolean)
                     .join(" ")}
@@ -1230,17 +1381,41 @@ export default function Home() {
                         {isSelected ? <Check size={17} /> : <Plus size={17} />}
                       </button>
                     </div>
+
+                    {/* Dynamic Stock Indicator Badge */}
+                    <div className="product-stock-tag">
+                      {isOutOfStock ? (
+                        <span className="stock-badge stock-out">Esgotado · Sob Encomenda</span>
+                      ) : isLowStock ? (
+                        <span className="stock-badge stock-low">Apenas {stockCount} em estoque</span>
+                      ) : stockCount !== null && stockCount !== undefined ? (
+                        <span className="stock-badge stock-available">{stockCount} unidades prontas</span>
+                      ) : (
+                        <span className="stock-badge stock-ready">Pronta Entrega Ipaussu</span>
+                      )}
+                    </div>
                   </div>
 
                   <div className="product-body">
                     <div className="product-head">
                       <h3>{product.name}</h3>
-                      {priceFormatted ? (
-                        <strong className="price-badge">{priceFormatted}</strong>
-                      ) : (
-                        <span className="consult-badge">Sob consulta</span>
-                      )}
+                      <div className="product-price-block">
+                        {pricePixFormatted ? (
+                          <>
+                            <strong className="price-badge-pix">{pricePixFormatted} <small>no PIX</small></strong>
+                            {priceFormatted && <span className="price-badge-card">ou {priceFormatted}</span>}
+                          </>
+                        ) : priceFormatted ? (
+                          <strong className="price-badge">{priceFormatted}</strong>
+                        ) : (
+                          <span className="consult-badge">Sob consulta</span>
+                        )}
+                      </div>
                     </div>
+
+                    {product.installments && (
+                      <span className="product-installments-pill">{product.installments}</span>
+                    )}
 
                     <p className="product-summary">
                       {isCellular
@@ -1251,7 +1426,7 @@ export default function Home() {
                     <div className="product-hook-row">
                       <span className="hook-chip hook-chip-emerald">
                         <ShieldCheck size={11} />
-                        {isCellular ? "Linha 13 ao 18 Pro Max" : "Pronta consulta · Ipaussu"}
+                        {isCellular ? "Linha 13 ao 18 Pro Max" : "Garantia WPlay · Ipaussu"}
                       </span>
                       <span className="hook-chip hook-chip-lime">
                         <Zap size={11} /> PIX ou Troca Smart
@@ -1310,7 +1485,7 @@ export default function Home() {
         )}
       </section>
 
-      {/* REDESIGNED INTERACTIVE ORDER STUDIO ("Central de Encomendas Sob Medida") */}
+      {/* REDESIGNED INTERACTIVE ORDER STUDIO ("Central de Encomendas & Follow-up") */}
       <section className="order-section" id="encomenda">
         <div className="order-studio-header">
           <div>
@@ -1318,7 +1493,7 @@ export default function Home() {
               Finalize seu <span>pedido.</span>
             </h2>
             <p className="order-studio-sub">
-              Personalize modelos, escolha retirada em Ipaussu ou entrega rápida e finalize no WhatsApp.
+              Personalize modelos, confirme estoque real e receba atendimento exclusivo com follow-up no WhatsApp.
             </p>
           </div>
 
@@ -1330,7 +1505,7 @@ export default function Home() {
               className={orderFilterCat === "Tudo" ? "order-cat-pill active" : "order-cat-pill"}
               onClick={() => setOrderFilterCat("Tudo")}
             >
-              Todos
+              Tudo
             </button>
             {activeCategories.map((cat) => (
               <button
@@ -1363,6 +1538,8 @@ export default function Home() {
                   ? chosenVariants[p.id] || activeIphoneSummary
                   : chosenVariants[p.id] || variants[0];
 
+                const stockCount = p.stockQuantity;
+
                 return (
                   <div
                     key={p.id}
@@ -1384,6 +1561,11 @@ export default function Home() {
                       />
                       <div className="order-select-info">
                         <strong>{p.name}</strong>
+                        {stockCount !== null && stockCount !== undefined && (
+                          <span className="order-stock-indicator">
+                            {stockCount > 0 ? `Estoque: ${stockCount} un.` : "Sob encomenda"}
+                          </span>
+                        )}
                       </div>
 
                       {active ? (
@@ -1478,21 +1660,21 @@ export default function Home() {
                     )}
                   </div>
                   <button type="submit" className="button button-lime">
-                    <Plus size={15} /> Incluir no Pedido
+                    <Plus size={15} /> Adicionar
                   </button>
                 </div>
               </form>
             </details>
 
-            {/* 3. Fulfillment & Payment Configurator */}
-            <details className="order-optional" open>
+            {/* 3. Delivery & Payment Preferences */}
+            <details className="order-preferences-panel" open>
               <summary>
-                Entrega, PIX ou Troca Smart <ArrowRight size={15} />
+                Formas de Entrega, Pagamento & Troca <ArrowRight size={15} />
               </summary>
               <div className="order-preferences-grid">
-                <div className="order-pref-box">
-                  <span className="pref-label">Como prefere receber?</span>
-                  <div className="pref-options">
+                <div>
+                  <span className="pref-label">Como deseja receber?</span>
+                  <div className="pref-btn-group">
                     <button
                       type="button"
                       className={
@@ -1505,10 +1687,10 @@ export default function Home() {
                         setFulfillment("Retirar na loja (Ipaussu)");
                       }}
                     >
-                      <Store size={16} />
+                      <Store size={15} />
                       <div>
                         <strong>Retirar na Loja</strong>
-                        <small>{settings.address_line}</small>
+                        <small>Pronta entrega em Ipaussu</small>
                       </div>
                     </button>
 
@@ -1524,18 +1706,18 @@ export default function Home() {
                         setFulfillment("Receber por entrega");
                       }}
                     >
-                      <Truck size={16} />
+                      <Truck size={15} />
                       <div>
-                        <strong>Receber por Entrega</strong>
+                        <strong>Entrega Rápida</strong>
                         <small>Ipaussu e região</small>
                       </div>
                     </button>
                   </div>
                 </div>
 
-                <div className="order-pref-box">
-                  <span className="pref-label">Preferência de pagamento ou troca</span>
-                  <div className="pref-options pref-options-3">
+                <div>
+                  <span className="pref-label">Preferência de Pagamento</span>
+                  <div className="pref-btn-group">
                     <button
                       type="button"
                       className={
@@ -1655,6 +1837,9 @@ export default function Home() {
                       <div className="tray-item-meta">
                         <strong>{product.name}</strong>
                         <span>{variant}</span>
+                        {product.pricePix ? (
+                          <small className="tray-price-note">{formatCurrencyBRL(product.pricePix * quantity)} (PIX)</small>
+                        ) : null}
                       </div>
                       <div className="tray-item-qty">
                         <button
@@ -1706,16 +1891,26 @@ export default function Home() {
               )}
             </div>
 
-            {/* Customer Name & Optional Note */}
+            {/* Customer Contact & Follow-up Fields */}
             <div className="tray-customer-fields">
               <input
                 type="text"
                 maxLength={50}
-                placeholder="Seu nome (opcional)"
+                placeholder="Seu nome completo"
                 value={customerName}
                 onChange={(e) => {
                   setCustomMessageOverride(null);
                   setCustomerName(e.target.value);
+                }}
+              />
+              <input
+                type="tel"
+                maxLength={20}
+                placeholder="Seu WhatsApp (com DDD)"
+                value={customerWhatsApp}
+                onChange={(e) => {
+                  setCustomMessageOverride(null);
+                  setCustomerWhatsApp(e.target.value);
                 }}
               />
               <input
@@ -1798,21 +1993,15 @@ export default function Home() {
           <h2>
             Encontre a <span>WPlay.</span>
           </h2>
+          <p className="location-sub">
+            Showroom físico e ponto de retirada oficial no centro de Ipaussu — SP.
+          </p>
         </div>
 
         <div className="location-layout">
           <div className="location-card">
-            <div className="location-card-top">
-              <img
-                src={activeLogoUrl}
-                alt="Logo Oficial WPlay Eletrônicos"
-                className="location-card-logo"
-                onError={(e) => handleImageErrorFallback(e, officialLogoPath)}
-              />
-            </div>
-
+            <span className="location-tag">Loja Física Oficial</span>
             <h3>{settings.store_name}</h3>
-
             <p className="location-address">
               {settings.address_line}
               <br />
@@ -1820,11 +2009,15 @@ export default function Home() {
             </p>
 
             <div className="location-hours">
-              {(settings.hours_lines || defaultStoreSettings.hours_lines).map(
-                (line, idx) => (
-                  <p key={idx}>{line}</p>
-                )
-              )}
+              <strong>Horários de Atendimento</strong>
+              <ul>
+                {(settings.hours_lines?.length
+                  ? settings.hours_lines
+                  : defaultStoreSettings.hours_lines
+                ).map((line, idx) => (
+                  <li key={idx}>{line}</li>
+                ))}
+              </ul>
             </div>
 
             <a
@@ -1857,7 +2050,7 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Footer with Official WPlay Logo (5x rapid click on brand triggers discrete owner access) */}
+      {/* Footer with Official WPlay Logo */}
       <footer className="footer">
         <div className="footer-brand-block">
           <Brand
@@ -1913,7 +2106,7 @@ export default function Home() {
         </div>
       </footer>
 
-      {/* Interactive Floating Bag / WhatsApp Dock */}
+      {/* Interactive Mobile Sticky Bar & Floating Bag */}
       <div className="floating-dock">
         {totalOrderCount > 0 && (
           <a href="#encomenda" className="floating-bag">
@@ -1989,7 +2182,7 @@ export default function Home() {
                         onChange={(event) => {
                           const nextModel = getIphoneModelById(event.target.value);
                           setActiveIphoneGen(nextModel.generation);
-                          applyIphoneConfiguration(nextModel);
+                          applyIphoneConfiguration(nextModel, undefined, undefined, selectedIphoneCondition);
                         }}
                       >
                         {iphoneGenerations.map((generation) => (
@@ -2013,7 +2206,8 @@ export default function Home() {
                           applyIphoneConfiguration(
                             activeIphoneModel,
                             event.target.value,
-                            activeIphoneFinish
+                            activeIphoneFinish,
+                            selectedIphoneCondition
                           )
                         }
                       >
@@ -2034,7 +2228,8 @@ export default function Home() {
                             applyIphoneConfiguration(
                               activeIphoneModel,
                               activeIphoneStorage,
-                              finish
+                              finish,
+                              selectedIphoneCondition
                             );
                         }}
                       >
@@ -2049,11 +2244,15 @@ export default function Home() {
                       Condição
                       <select
                         value={selectedIphoneCondition}
-                        onChange={(event) =>
-                          setSelectedIphoneCondition(
-                            event.target.value as "Lacrado" | "Seminovo"
-                          )
-                        }
+                        onChange={(event) => {
+                          const nextCond = event.target.value as "Lacrado" | "Seminovo";
+                          applyIphoneConfiguration(
+                            activeIphoneModel,
+                            activeIphoneStorage,
+                            activeIphoneFinish,
+                            nextCond
+                          );
+                        }}
                       >
                         <option>Lacrado</option>
                         <option>Seminovo</option>

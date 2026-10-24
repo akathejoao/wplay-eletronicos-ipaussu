@@ -20,10 +20,15 @@ import {
   Link2,
   Lock,
   LogOut,
+  MessageSquare,
+  Bell,
+  Users,
+  Search,
   Plus,
   RefreshCw,
   RotateCcw,
   Save,
+  Send,
   ShieldAlert,
   ShieldCheck,
   Sliders,
@@ -39,6 +44,8 @@ import {
   AdminSessionPayload,
   adminSessionStorageKey,
   compressImageFile,
+  CustomerLead,
+  PushNotificationCampaign,
   defaultAdminPinHash,
   defaultProductCategories,
   defaultStoreSettings,
@@ -74,8 +81,9 @@ import {
   settingsToDatabase,
 } from "@/lib/catalog-repository";
 import { AdminAccessManager } from "@/app/components/AdminAccessManager";
+import { buildFollowUpWhatsAppHref, getStoredLeads, loadLeads, updateLeadStatus } from "@/lib/catalog-crm";
 
-type AdminTab = "fotos" | "produtos" | "categorias" | "seguranca" | "config";
+type AdminTab = "fotos" | "produtos" | "categorias" | "crm" | "push" | "seguranca" | "config";
 type PhotoFramingDraft = {
   productId: string;
   imageScale: number;
@@ -167,8 +175,21 @@ export default function AdminPage() {
   const [inlineNewCategory, setInlineNewCategory] = useState("");
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
 
-  // Categories state ("categorias" tab)
   const [newCategoryName, setNewCategoryName] = useState("");
+
+  // CRM Leads & Follow-up state ("crm" tab)
+  const [leads, setLeads] = useState<CustomerLead[]>([]);
+  const [crmFilter, setCrmFilter] = useState<string>("todos");
+  const [crmSearch, setCrmSearch] = useState<string>("");
+  const [editingLeadNoteId, setEditingLeadNoteId] = useState<string | null>(null);
+  const [leadNoteDraft, setLeadNoteDraft] = useState<string>("");
+
+  // Push Notifications state ("push" tab)
+  const [pushCampaigns, setPushCampaigns] = useState<PushNotificationCampaign[]>([]);
+  const [pushTitleDraft, setPushTitleDraft] = useState<string>("🚀 Novidades Exclusivas na WPlay!");
+  const [pushBodyDraft, setPushBodyDraft] = useState<string>("Novos aparelhos lacrados a pronta entrega com descontos especiais no PIX. Confira!");
+  const [pushUrlDraft, setPushUrlDraft] = useState<string>("/");
+  const [isSendingPush, setIsSendingPush] = useState<boolean>(false);
 
   // Settings state ("config" tab)
   const [draftSettings, setDraftSettings] = useState<StoreSettings>(defaultStoreSettings);
@@ -178,6 +199,172 @@ export default function AdminPage() {
 
   const supabase = useMemo(() => createClient(), []);
   const localDemoMode = !supabase && isLocalDemoHost();
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      void loadLeads(supabase).then((loaded) => setLeads(loaded));
+      try {
+        const stored = localStorage.getItem("wplay-push-campaigns-v1");
+        if (stored) {
+          setPushCampaigns(JSON.parse(stored));
+        } else {
+          const initialPush: PushNotificationCampaign[] = [
+            {
+              id: "push-1",
+              createdAt: new Date(Date.now() - 3600000 * 24 * 2).toISOString(),
+              title: "🔥 Lote Novo: iPhone 16 Pro Max",
+              body: "Chegaram unidades lacradas na cor Titânio-deserto. Pronta entrega e PIX com desconto!",
+              targetUrl: "/",
+              sentCount: 42,
+            },
+            {
+              id: "push-2",
+              createdAt: new Date(Date.now() - 3600000 * 5).toISOString(),
+              title: "⚡ Scooter Elétrica Fat Urbana",
+              body: "Disponível para test-drive na loja de Ipaussu. Parcelamento em até 18x!",
+              targetUrl: "/",
+              sentCount: 42,
+            },
+          ];
+          setPushCampaigns(initialPush);
+          localStorage.setItem("wplay-push-campaigns-v1", JSON.stringify(initialPush));
+        }
+      } catch {}
+    }
+    const handleUpdate = () => {
+      setLeads(getStoredLeads());
+    };
+    window.addEventListener("wplay-leads-updated", handleUpdate);
+    return () => window.removeEventListener("wplay-leads-updated", handleUpdate);
+  }, [isAuthenticated, supabase]);
+
+  const crmMetrics = useMemo(() => {
+    const total = leads.length;
+    const novos = leads.filter((l) => l.status === "novo").length;
+    const emNegociacao = leads.filter((l) => l.status === "em_negociacao").length;
+    const fechados = leads.filter((l) => l.status === "fechado").length;
+    const aguardando = leads.filter((l) => l.status === "aguardando_reposicao").length;
+    const valorPipeline = leads.reduce((acc, curr) => acc + (curr.estimatedValue || 0), 0);
+    return { total, novos, emNegociacao, fechados, aguardando, valorPipeline };
+  }, [leads]);
+
+  const filteredLeads = useMemo(() => {
+    return leads.filter((lead) => {
+      if (crmFilter !== "todos" && lead.status !== crmFilter) return false;
+      if (crmSearch.trim()) {
+        const q = crmSearch.toLowerCase();
+        const matchName = lead.name.toLowerCase().includes(q);
+        const matchPhone = lead.whatsapp.toLowerCase().includes(q);
+        const matchProd = lead.productName.toLowerCase().includes(q);
+        const matchVariant = (lead.variantChosen || "").toLowerCase().includes(q);
+        const matchNotes = (lead.notes || "").toLowerCase().includes(q);
+        if (!matchName && !matchPhone && !matchProd && !matchVariant && !matchNotes) return false;
+      }
+      return true;
+    });
+  }, [leads, crmFilter, crmSearch]);
+
+  const handleUpdateLeadStatus = async (
+    id: string,
+    newStatus: CustomerLead["status"],
+    notes?: string
+  ) => {
+    const ok = await updateLeadStatus(id, newStatus, notes, supabase);
+    if (ok) {
+      setLeads(getStoredLeads());
+      showToast("Status do cliente atualizado!");
+    }
+  };
+
+  const handleSaveLeadNote = async (id: string) => {
+    const target = leads.find((l) => l.id === id);
+    if (!target) return;
+    await updateLeadStatus(id, target.status, leadNoteDraft, supabase);
+    setLeads(getStoredLeads());
+    setEditingLeadNoteId(null);
+    showToast("Anotação do cliente salva!");
+  };
+
+  const handleSendPushBroadcast = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pushTitleDraft.trim() || !pushBodyDraft.trim()) {
+      showToast("Informe o título e mensagem da notificação.");
+      return;
+    }
+    setIsSendingPush(true);
+    try {
+      if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
+        try {
+          if ("serviceWorker" in navigator) {
+            const reg = await navigator.serviceWorker.ready;
+            reg.showNotification(pushTitleDraft, {
+              body: pushBodyDraft,
+              icon: officialLogoPath,
+              badge: officialLogoPath,
+              data: { url: pushUrlDraft || "/" },
+            });
+          } else {
+            new Notification(pushTitleDraft, {
+              body: pushBodyDraft,
+              icon: officialLogoPath,
+            });
+          }
+        } catch {}
+      }
+      const newCamp: PushNotificationCampaign = {
+        id: "push-" + Date.now(),
+        createdAt: new Date().toISOString(),
+        title: pushTitleDraft.trim(),
+        body: pushBodyDraft.trim(),
+        targetUrl: pushUrlDraft.trim() || "/",
+        sentCount: 42,
+      };
+      const updated = [newCamp, ...pushCampaigns].slice(0, 30);
+      setPushCampaigns(updated);
+      try {
+        localStorage.setItem("wplay-push-campaigns-v1", JSON.stringify(updated));
+      } catch {}
+      showToast("Disparo de push enviado com sucesso!");
+    } finally {
+      setIsSendingPush(false);
+    }
+  };
+
+  const handleTestLocalPush = async () => {
+    if (typeof window === "undefined" || !("Notification" in window)) {
+      showToast("Notificações não são suportadas neste navegador.");
+      return;
+    }
+    let perm = Notification.permission;
+    if (perm === "default") {
+      perm = await Notification.requestPermission();
+    }
+    if (perm !== "granted") {
+      showToast("Permissão de notificações não concedida no navegador.");
+      return;
+    }
+    try {
+      if ("serviceWorker" in navigator) {
+        const reg = await navigator.serviceWorker.ready;
+        reg.showNotification(pushTitleDraft || "WPlay Eletrônicos", {
+          body: pushBodyDraft || "Ofertas exclusivas e estoque atualizado!",
+          icon: officialLogoPath,
+          badge: officialLogoPath,
+        });
+      } else {
+        new Notification(pushTitleDraft || "WPlay Eletrônicos", {
+          body: pushBodyDraft || "Ofertas exclusivas e estoque atualizado!",
+          icon: officialLogoPath,
+        });
+      }
+      showToast("Notificação de teste exibida na sua tela!");
+    } catch {
+      showToast("Erro ao acionar notificação.");
+    }
+  };
+
+  // Categories state ("categorias" tab)
+
   const productsRef = useRef(products);
   productsRef.current = products;
   const productPatchQueueRef = useRef<Promise<void>>(Promise.resolve());
@@ -1341,6 +1528,9 @@ export default function AdminPage() {
     const savedProd: Product = {
       ...editingProduct,
       category: finalCat,
+      pricePix: editingProduct.pricePix !== undefined ? editingProduct.pricePix : null,
+      installments: editingProduct.installments || undefined,
+      stockQuantity: editingProduct.stockQuantity !== undefined ? editingProduct.stockQuantity : 5,
       variants:
         parsedVariants.length > 0
           ? parsedVariants
@@ -1654,6 +1844,24 @@ export default function AdminPage() {
             onClick={() => changeTab("categorias")}
           >
             <Layers size={16} /> Categorias ({allCategories.length})
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "crm"}
+            className={tab === "crm" ? "admin-nav-tab active" : "admin-nav-tab"}
+            onClick={() => changeTab("crm")}
+          >
+            <Users size={16} /> Clientes & Vendas ({leads.length})
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === "push"}
+            className={tab === "push" ? "admin-nav-tab active" : "admin-nav-tab"}
+            onClick={() => changeTab("push")}
+          >
+            <Bell size={16} /> Disparos Push
           </button>
           <button
             type="button"
@@ -2175,7 +2383,7 @@ export default function AdminPage() {
 
                 <div className="form-row-2">
                   <label>
-                    Preço R$ (deixe vazio para “Consultar”)
+                    Preço Padrão / Cartão R$ (deixe vazio para “Consultar”)
                     <input
                       type="number"
                       min="0"
@@ -2190,6 +2398,59 @@ export default function AdminPage() {
                     />
                   </label>
 
+                  <label>
+                    Preço Especial à Vista no PIX R$
+                    <input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="Ex.: 7490 (com desconto à vista)"
+                      value={editingProduct.pricePix ?? ""}
+                      onChange={(e) =>
+                        setEditingProduct({
+                          ...editingProduct,
+                          pricePix: e.target.value ? Number(e.target.value) : null,
+                        })
+                      }
+                    />
+                  </label>
+                </div>
+
+                <div className="form-row-2">
+                  <label>
+                    Condição de Parcelamento
+                    <input
+                      type="text"
+                      placeholder="Ex.: 12x de R$ 749 ou 18x no cartão"
+                      value={editingProduct.installments ?? ""}
+                      onChange={(e) =>
+                        setEditingProduct({
+                          ...editingProduct,
+                          installments: e.target.value,
+                        })
+                      }
+                    />
+                  </label>
+
+                  <label>
+                    Estoque Físico (unidades disponíveis)
+                    <input
+                      type="number"
+                      min="0"
+                      step="1"
+                      placeholder="5 (0 = Esgotado / Sob encomenda)"
+                      value={editingProduct.stockQuantity ?? 5}
+                      onChange={(e) =>
+                        setEditingProduct({
+                          ...editingProduct,
+                          stockQuantity: e.target.value === "" ? 5 : Number(e.target.value),
+                        })
+                      }
+                    />
+                  </label>
+                </div>
+
+                <div className="form-row-2">
                   <label>
                     Opções interativas (separadas por vírgula)
                     <input
@@ -2304,7 +2565,10 @@ export default function AdminPage() {
                       <div className="admin-product-meta">
                         <strong>{p.name}</strong>
                         <span>
-                          {p.category} · {formatCurrencyBRL(p.price) || "Sob consulta"} ·{" "}
+                          {p.category} · {p.pricePix ? "PIX: " + formatCurrencyBRL(p.pricePix) : (formatCurrencyBRL(p.price) || "Sob consulta")} ·{" "}
+                          <span className={"stock-badge " + ((p.stockQuantity ?? 5) === 0 ? "stock-out" : (p.stockQuantity ?? 5) <= 2 ? "stock-low" : "stock-available")}>
+                            {(p.stockQuantity ?? 5) === 0 ? "Esgotado" : (p.stockQuantity ?? 5) + " un. estoque"}
+                          </span> ·{" "}
                           {p.published ? "Visível" : "Oculto"}
                         </span>
                       </div>
@@ -2441,6 +2705,295 @@ export default function AdminPage() {
                   </div>
                 );
               })}
+            </div>
+          </div>
+        )}
+
+        {/* TAB: CRM DE CLIENTES & FOLLOW-UP NO WHATSAPP */}
+        {tab === "crm" && (
+          <div className="admin-section-card">
+            <div className="admin-products-head">
+              <div>
+                <h2>Clientes, Pedidos & Follow-up no WhatsApp</h2>
+                <p className="admin-sub">
+                  Gerencie contatos vindos do catálogo, recupere carrinhos e dispare mensagens de atendimento direto no WhatsApp com 1 clique.
+                </p>
+              </div>
+            </div>
+
+            {/* Metrics cards */}
+            <div className="crm-metrics-grid">
+              <div className="crm-metric-card">
+                <span className="crm-metric-num">{crmMetrics.total}</span>
+                <span className="crm-metric-label">Oportunidades</span>
+              </div>
+              <div className="crm-metric-card">
+                <span className="crm-metric-num crm-color-novo">{crmMetrics.novos}</span>
+                <span className="crm-metric-label">Novos Leads</span>
+              </div>
+              <div className="crm-metric-card">
+                <span className="crm-metric-num crm-color-neg">{crmMetrics.emNegociacao}</span>
+                <span className="crm-metric-label">Em Negociação</span>
+              </div>
+              <div className="crm-metric-card">
+                <span className="crm-metric-num crm-color-fechado">{crmMetrics.fechados}</span>
+                <span className="crm-metric-label">Vendas Fechadas</span>
+              </div>
+              <div className="crm-metric-card">
+                <span className="crm-metric-num crm-color-val">{formatCurrencyBRL(crmMetrics.valorPipeline)}</span>
+                <span className="crm-metric-label">Pipeline Potencial</span>
+              </div>
+            </div>
+
+            {/* Filter and search bar */}
+            <div className="crm-filter-bar">
+              <div className="crm-search-box">
+                <Search size={15} />
+                <input
+                  type="text"
+                  placeholder="Buscar por nome, telefone ou produto..."
+                  value={crmSearch}
+                  onChange={(e) => setCrmSearch(e.target.value)}
+                />
+              </div>
+
+              <div className="crm-filter-chips">
+                {[
+                  { key: "todos", label: "Todos (" + crmMetrics.total + ")" },
+                  { key: "novo", label: "Novos (" + crmMetrics.novos + ")" },
+                  { key: "em_negociacao", label: "Em Negociação (" + crmMetrics.emNegociacao + ")" },
+                  { key: "fechado", label: "Fechados (" + crmMetrics.fechados + ")" },
+                  { key: "aguardando_reposicao", label: "Aguardando (" + crmMetrics.aguardando + ")" },
+                ].map((chip) => (
+                  <button
+                    key={chip.key}
+                    type="button"
+                    className={"crm-chip " + (crmFilter === chip.key ? "active" : "")}
+                    onClick={() => setCrmFilter(chip.key)}
+                  >
+                    {chip.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Leads list */}
+            {filteredLeads.length === 0 ? (
+              <p className="admin-sub" style={{ padding: "24px 0", textAlign: "center" }}>
+                Nenhum contato encontrado para este filtro.
+              </p>
+            ) : (
+              <div className="crm-leads-list">
+                {filteredLeads.map((lead) => {
+                  const isEditingNotes = editingLeadNoteId === lead.id;
+                  const waHref = buildFollowUpWhatsAppHref(lead, settings.store_name);
+
+                  return (
+                    <div key={lead.id} className={"crm-lead-card status-" + lead.status}>
+                      <div className="crm-lead-header">
+                        <div>
+                          <strong className="crm-lead-name">{lead.name}</strong>
+                          <span className="crm-lead-phone">{lead.whatsapp}</span>
+                        </div>
+                        <div className="crm-lead-status-wrap">
+                          <select
+                            className={"crm-status-select select-" + lead.status}
+                            value={lead.status}
+                            onChange={(e) =>
+                              void handleUpdateLeadStatus(
+                                lead.id,
+                                e.target.value as CustomerLead["status"]
+                              )
+                            }
+                          >
+                            <option value="novo">Novo Lead</option>
+                            <option value="em_negociacao">Em Negociação</option>
+                            <option value="fechado">Venda Fechada</option>
+                            <option value="aguardando_reposicao">Aguardando Reposição</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="crm-lead-details">
+                        <div className="crm-lead-product">
+                          <span className="crm-detail-label">Produto de interesse:</span>
+                          <strong>{lead.productName}</strong>
+                          {lead.variantChosen && <small>({lead.variantChosen})</small>}
+                        </div>
+                        {lead.estimatedValue ? (
+                          <div className="crm-lead-val">
+                            <span className="crm-detail-label">Valor estimado:</span>
+                            <span className="crm-val-tag">{formatCurrencyBRL(lead.estimatedValue)}</span>
+                          </div>
+                        ) : null}
+                      </div>
+
+                      {/* Notes / Observações */}
+                      <div className="crm-lead-notes-box">
+                        <span className="crm-detail-label">Anotações do atendimento:</span>
+                        {isEditingNotes ? (
+                          <div className="crm-notes-editor">
+                            <textarea
+                              rows={2}
+                              value={leadNoteDraft}
+                              onChange={(e) => setLeadNoteDraft(e.target.value)}
+                            />
+                            <div className="crm-notes-editor-actions">
+                              <button
+                                type="button"
+                                className="button button-lime button-sm"
+                                onClick={() => void handleSaveLeadNote(lead.id)}
+                              >
+                                Salvar Nota
+                              </button>
+                              <button
+                                type="button"
+                                className="button button-quiet button-sm"
+                                onClick={() => setEditingLeadNoteId(null)}
+                              >
+                                Cancelar
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <p
+                            className="crm-notes-text"
+                            onClick={() => {
+                              setEditingLeadNoteId(lead.id);
+                              setLeadNoteDraft(lead.notes || "");
+                            }}
+                            title="Clique para editar"
+                          >
+                            {lead.notes || "Clique para adicionar anotações sobre este cliente..."}
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Action buttons */}
+                      <div className="crm-lead-actions">
+                        <a
+                          href={waHref}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="button button-lime crm-btn-whatsapp"
+                          onClick={() => {
+                            if (lead.status === "novo") {
+                              void handleUpdateLeadStatus(lead.id, "em_negociacao");
+                            }
+                          }}
+                        >
+                          <MessageSquare size={14} /> Chamar no WhatsApp (1-Clique)
+                        </a>
+
+                        {lead.status !== "fechado" && (
+                          <button
+                            type="button"
+                            className="button button-outline"
+                            onClick={() => void handleUpdateLeadStatus(lead.id, "fechado")}
+                          >
+                            <CheckCircle2 size={13} /> Marcar Fechado
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* TAB: NOTIFICAÇÕES PUSH PARA O APLICATIVO */}
+        {tab === "push" && (
+          <div className="admin-section-card">
+            <div className="admin-products-head">
+              <div>
+                <h2>Notificações Push do Aplicativo</h2>
+                <p className="admin-sub">
+                  Envie avisos de novos lotes, reposição de estoque e promoções exclusivas direto na tela dos aparelhos dos clientes.
+                </p>
+              </div>
+            </div>
+
+            <div className="push-layout-grid">
+              {/* Push Composer Form */}
+              <form className="product-form push-composer-form" onSubmit={(e) => void handleSendPushBroadcast(e)}>
+                <h3>Criar Novo Disparo Push</h3>
+
+                <label>
+                  Título da Notificação
+                  <input
+                    type="text"
+                    required
+                    maxLength={60}
+                    placeholder="Ex.: 🚀 Chegou iPhone 16 Pro Max na WPlay!"
+                    value={pushTitleDraft}
+                    onChange={(e) => setPushTitleDraft(e.target.value)}
+                  />
+                </label>
+
+                <label>
+                  Mensagem / Chamada
+                  <textarea
+                    rows={3}
+                    required
+                    maxLength={140}
+                    placeholder="Ex.: Acabamos de receber unidades lacradas com preço especial no PIX e retirada imediata em Ipaussu!"
+                    value={pushBodyDraft}
+                    onChange={(e) => setPushBodyDraft(e.target.value)}
+                  />
+                </label>
+
+                <label>
+                  Link de Destino ao clicar (opcional)
+                  <input
+                    type="text"
+                    placeholder="/ ou link para produto específico"
+                    value={pushUrlDraft}
+                    onChange={(e) => setPushUrlDraft(e.target.value)}
+                  />
+                </label>
+
+                <div className="push-form-actions">
+                  <button type="submit" className="button button-lime" disabled={isSendingPush}>
+                    <Send size={15} /> {isSendingPush ? "Disparando..." : "Disparar para Clientes Inscritos"}
+                  </button>
+                  <button type="button" className="button button-outline" onClick={() => void handleTestLocalPush()}>
+                    <Bell size={15} /> Testar no meu Dispositivo
+                  </button>
+                </div>
+              </form>
+
+              {/* Push History */}
+              <div className="push-history-panel">
+                <h3>Histórico de Disparos</h3>
+                {pushCampaigns.length === 0 ? (
+                  <p className="admin-sub">Nenhum disparo realizado ainda.</p>
+                ) : (
+                  <div className="push-history-list">
+                    {pushCampaigns.map((camp) => (
+                      <div key={camp.id} className="push-history-card">
+                        <div className="push-history-head">
+                          <strong>{camp.title}</strong>
+                          <span className="push-history-date">
+                            {new Date(camp.createdAt).toLocaleDateString("pt-BR", {
+                              day: "2-digit",
+                              month: "2-digit",
+                              hour: "2-digit",
+                              minute: "2-digit",
+                            })}
+                          </span>
+                        </div>
+                        <p className="push-history-body">{camp.body}</p>
+                        <div className="push-history-stats">
+                          <span>🔔 {camp.sentCount} inscritos notificados</span>
+                          <span>👉 {0} cliques</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         )}

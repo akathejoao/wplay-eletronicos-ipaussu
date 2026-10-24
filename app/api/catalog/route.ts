@@ -14,7 +14,6 @@ export async function GET() {
   }
   try {
     const baseUrl = url.replace(/\/$/, "");
-    const productsQuery = new URLSearchParams({ select: productColumns, published: "eq.true", order: "created_at.desc,id.asc" });
     const settingsQuery = new URLSearchParams({ select: publicSettingsColumns, id: "eq.true" });
     const options = {
       headers: {
@@ -24,10 +23,17 @@ export async function GET() {
       next: { revalidate: 300, tags: [catalogCacheTag] },
       signal: AbortSignal.timeout(12_000),
     };
-    const [productsResponse, settingsResponse] = await Promise.all([
-      fetch(`${baseUrl}/rest/v1/products?${productsQuery}`, options),
-      fetch(`${baseUrl}/rest/v1/store_settings?${settingsQuery}`, options),
-    ]);
+
+    // Try full productColumns first, fall back gracefully if new columns don't exist yet in Supabase
+    let productsResponse = await fetch(`${baseUrl}/rest/v1/products?${new URLSearchParams({ select: productColumns, published: "eq.true", order: "created_at.desc,id.asc" })}`, options);
+    
+    if (!productsResponse.ok) {
+      const basicProductColumns = "id,name,category,description,badge,price,image,image_fit,image_position,image_scale,published,featured,variants";
+      productsResponse = await fetch(`${baseUrl}/rest/v1/products?${new URLSearchParams({ select: basicProductColumns, published: "eq.true", order: "created_at.desc,id.asc" })}`, options);
+    }
+
+    const settingsResponse = await fetch(`${baseUrl}/rest/v1/store_settings?${settingsQuery}`, options);
+
     if (!productsResponse.ok || !settingsResponse.ok) throw new Error("Catalog request failed");
     const [products, settings] = await Promise.all([productsResponse.json(), settingsResponse.json()]);
     if (!Array.isArray(products) || !Array.isArray(settings)) throw new Error("Invalid catalog response");

@@ -4,6 +4,7 @@ import "./storefront.css";
 import "./atmosphere.css";
 
 export const metadata: Metadata = {
+  icons: { icon: "/images/wplay-logo-official.png" },
   title: "WPlay Eletrônicos | Ipaussu",
   description: "Eletrônicos, mobilidade e acessórios em Ipaussu. Consulte a WPlay pelo WhatsApp.",
 };

@@ -68,7 +68,13 @@ import {
 } from "@/lib/iphone-models";
 import { Iphone3DStudio } from "@/app/components/Iphone3DStudio";
 import { Product3DStudio } from "@/app/components/Product3DStudio";
-import { createClient } from "@/lib/supabase";
+import { createClient, isLocalDemoHost } from "@/lib/supabase";
+import {
+  productColumns,
+  productFromDatabase,
+  settingsColumns,
+  settingsFromDatabase,
+} from "@/lib/catalog-repository";
 import { StoreAtmosphere } from "@/app/components/StoreAtmosphere";
 
 type FulfillmentMode = "Retirar na loja (Ipaussu)" | "Receber por entrega";
@@ -166,7 +172,7 @@ function Brand({
 
 export default function Home() {
   const router = useRouter();
-  const [products, setProducts] = useState<Product[]>(initialProducts);
+  const [products, setProducts] = useState<Product[]>([]);
   const [settings, setSettings] = useState<StoreSettings>(defaultStoreSettings);
   const [category, setCategory] = useState<string>("Tudo");
   const [onlyFeatured, setOnlyFeatured] = useState(false);
@@ -174,7 +180,9 @@ export default function Home() {
   const [menuOpen, setMenuOpen] = useState(false);
   const [ambientPaused, setAmbientPaused] = useState(false);
   const [notice, setNotice] = useState("");
+  const [catalogLoadError, setCatalogLoadError] = useState("");
   const [safeLinkRecovery, setSafeLinkRecovery] = useState<SafeLinkRecoveryState>(null);
+  const supabase = useMemo(() => createClient(), []);
 
   // Scroll-Driven Atmosphere Stage
   const [atmosphereStage, setAtmosphereStage] = useState<AtmosphereStage>("hero");
@@ -345,74 +353,121 @@ export default function Home() {
     }));
   };
 
-  // Load saved products & settings + listen for changes from /admin
   useEffect(() => {
-    const syncFromLocal = () => {
-      try {
-        const savedProducts = localStorage.getItem(productsStorageKey);
-        if (savedProducts) {
-          const parsed = JSON.parse(savedProducts) as Partial<Product>[];
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            setProducts(parsed.map((item, idx) => normalizeProduct(item, idx)));
+    if (!supabase) {
+      if (!isLocalDemoHost()) {
+        setProducts([]);
+        setCatalogLoadError(
+          "A vitrine precisa ser configurada com a conexão do Supabase para carregar o catálogo."
+        );
+        return;
+      }
+
+      const syncFromLocal = () => {
+        setProducts(initialProducts);
+        setSettings(defaultStoreSettings);
+        try {
+          const savedProducts = localStorage.getItem(productsStorageKey);
+          if (savedProducts) {
+            const parsed = JSON.parse(savedProducts) as Partial<Product>[];
+            if (Array.isArray(parsed)) {
+              setProducts(parsed.map((item, idx) => normalizeProduct(item, idx)));
+            }
           }
+          const savedSettings = localStorage.getItem(settingsStorageKey);
+          if (savedSettings) {
+            const parsedSettings = JSON.parse(savedSettings) as Partial<StoreSettings>;
+            setSettings(normalizeSettings(parsedSettings));
+          }
+        } catch {
+          // ignore read error
         }
-        const savedSettings = localStorage.getItem(settingsStorageKey);
-        if (savedSettings) {
-          const parsedSettings = JSON.parse(savedSettings) as Partial<StoreSettings>;
-          setSettings(normalizeSettings(parsedSettings));
+      };
+
+      syncFromLocal();
+      window.addEventListener("storage", syncFromLocal);
+      return () => window.removeEventListener("storage", syncFromLocal);
+    }
+
+    setProducts([]);
+    setSettings(defaultStoreSettings);
+    let cancelled = false;
+    let loading = false;
+
+    const syncFromCloud = async () => {
+      if (loading || cancelled || document.visibilityState === "hidden") return;
+      loading = true;
+      try {
+        const [productsResult, settingsResult] = await Promise.all([
+          supabase
+            .from("products")
+            .select(productColumns)
+            .eq("published", true)
+            .order("created_at", { ascending: false }),
+          supabase
+            .from("store_settings")
+            .select(settingsColumns)
+            .eq("id", true)
+            .maybeSingle(),
+        ]);
+        if (cancelled) return;
+
+        const errors: string[] = [];
+        if (productsResult.error) {
+          errors.push("Não foi possível carregar os produtos.");
+        } else {
+          const rows = productsResult.data || [];
+          setProducts(
+            rows.map((row, idx) =>
+              normalizeProduct(
+                productFromDatabase(row as unknown as Record<string, unknown>),
+                idx
+              )
+            )
+          );
         }
-      } catch {
-        // ignore read error
+        if (settingsResult.error) {
+          errors.push("Não foi possível carregar as configurações da loja.");
+        } else {
+          setSettings(
+            settingsResult.data
+              ? normalizeSettings(
+                  settingsFromDatabase(
+                    settingsResult.data as unknown as Record<string, unknown>
+                  )
+                )
+              : defaultStoreSettings
+          );
+        }
+        setCatalogLoadError(errors.join(" "));
+      } catch (error) {
+        if (!cancelled) {
+          setCatalogLoadError(
+            error instanceof Error
+              ? `Falha ao conectar ao catálogo: ${error.message}`
+              : "Falha ao conectar ao catálogo."
+          );
+        }
+      } finally {
+        loading = false;
       }
     };
 
-    syncFromLocal();
-    window.addEventListener("storage", syncFromLocal);
+    void syncFromCloud();
+    const syncWhenVisible = () => {
+      if (document.visibilityState === "visible") void syncFromCloud();
+    };
+    const poll = window.setInterval(() => void syncFromCloud(), 60_000);
+    window.addEventListener("focus", syncWhenVisible);
+    document.addEventListener("visibilitychange", syncWhenVisible);
 
-    const supabase = createClient();
-    if (supabase) {
-      void supabase
-        .from("products")
-        .select(
-          "id,name,category,description,badge,price,image,published,featured,variants"
-        )
-        .order("created_at", { ascending: false })
-        .then(({ data }) => {
-          if (data?.length) {
-            const normalized = data.map((item, idx) =>
-              normalizeProduct(item as Partial<Product>, idx)
-            );
-            setProducts(normalized);
-            try {
-              localStorage.setItem(productsStorageKey, JSON.stringify(normalized));
-            } catch {
-              // ignore
-            }
-          }
-        });
-
-      void supabase
-        .from("store_settings")
-        .select(
-          "store_name,hero_headline,whatsapp_url,whatsapp_phone,instagram_url,instagram_handle,city,address_line,postal_code,maps_url,hours_lines,custom_categories,attendance_note"
-        )
-        .eq("id", true)
-        .maybeSingle()
-        .then(({ data }) => {
-          if (data) {
-            const merged = normalizeSettings(data as Partial<StoreSettings>);
-            setSettings(merged);
-            try {
-              localStorage.setItem(settingsStorageKey, JSON.stringify(merged));
-            } catch {
-              // ignore
-            }
-          }
-        });
-    }
-
-    return () => window.removeEventListener("storage", syncFromLocal);
-  }, []);
+    return () => {
+      cancelled = true;
+      window.clearInterval(poll);
+      window.removeEventListener("focus", syncWhenVisible);
+      document.removeEventListener("visibilitychange", syncWhenVisible);
+    };
+  }, [supabase]);
 
   useEffect(() => {
     const stageTargets: [string, AtmosphereStage][] = [
@@ -777,6 +832,11 @@ export default function Home() {
 
   return (
     <main id="inicio" className="storefront-clean" data-stage={atmosphereStage}>
+      {catalogLoadError && (
+        <div className="admin-security-banner" role="alert">
+          <ShieldCheck size={15} /> <span>{catalogLoadError}</span>
+        </div>
+      )}
       <StoreAtmosphere paused={ambientPaused} />
 
       <header className="header">

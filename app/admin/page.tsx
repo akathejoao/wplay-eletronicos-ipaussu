@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   ArrowLeft,
@@ -61,13 +61,23 @@ import {
   studioGallery,
   verifyAdminCredentials,
 } from "@/lib/catalog";
-import { createClient } from "@/lib/supabase";
+import { createClient, isLocalDemoHost } from "@/lib/supabase";
+import {
+  productColumns,
+  productFromDatabase,
+  productToDatabase,
+  settingsColumns,
+  settingsFromDatabase,
+  settingsToDatabase,
+} from "@/lib/catalog-repository";
+import { AdminAccessManager } from "@/app/components/AdminAccessManager";
 
 type AdminTab = "fotos" | "produtos" | "categorias" | "seguranca" | "config";
 
 const SESSION_TTL_MS = 2 * 60 * 60 * 1000; // 2 hours
 const MAX_LOGIN_ATTEMPTS = 5;
 const LOCKOUT_DURATION_MS = 60 * 1000; // 60 seconds
+const adminAuthFlowStorageKey = "wplay-admin-auth-flow-v1";
 
 function parsePositionPercent(pos: string | undefined): { x: number; y: number } {
   if (!pos) return { x: 50, y: 50 };
@@ -101,6 +111,13 @@ export default function AdminPage() {
   // Hardened Authentication & Session state
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authChecking, setAuthChecking] = useState(true);
+  const [cloudDataLoaded, setCloudDataLoaded] = useState(false);
+  const [cloudLoadError, setCloudLoadError] = useState("");
+  const [isPasswordRecovery, setIsPasswordRecovery] = useState(false);
+  const [passwordlessSession, setPasswordlessSession] = useState(false);
+  const [emailCodeSent, setEmailCodeSent] = useState(false);
+  const [emailCode, setEmailCode] = useState("");
+  const [emailActionMessage, setEmailActionMessage] = useState("");
   const [loginUser, setLoginUser] = useState("");
   const [loginPass, setLoginPass] = useState("");
   const [showLoginPass, setShowLoginPass] = useState(false);
@@ -148,6 +165,77 @@ export default function AdminPage() {
   );
 
   const supabase = useMemo(() => createClient(), []);
+  const localDemoMode = !supabase && isLocalDemoHost();
+  const draftStateRef = useRef({ settings, draftSettings, hoursTextarea, editingProduct });
+  draftStateRef.current = { settings, draftSettings, hoursTextarea, editingProduct };
+
+  const loadCloudData = useCallback(async (background = false) => {
+    if (!supabase) return { success: false, error: "Conexão Supabase indisponível." };
+    setCloudDataLoaded(false);
+    setCloudLoadError("");
+    try {
+      const [productsResult, settingsResult] = await Promise.all([
+        supabase
+          .from("products")
+          .select(productColumns)
+          .order("created_at", { ascending: false }),
+        supabase
+          .from("store_settings")
+          .select(settingsColumns)
+          .eq("id", true)
+          .maybeSingle(),
+      ]);
+
+      const errors: string[] = [];
+      if (productsResult.error) {
+        errors.push(`Produtos: ${productsResult.error.message}`);
+      }
+      if (settingsResult.error) {
+        errors.push(`Configurações: ${settingsResult.error.message}`);
+      }
+      if (errors.length) {
+        const message = errors.join(" ");
+        setCloudLoadError(message);
+        return { success: false, error: message };
+      }
+
+      const loadedProducts = (productsResult.data || []).map((row, index) =>
+        normalizeProduct(
+          productFromDatabase(row as unknown as Record<string, unknown>),
+          index
+        )
+      );
+      const loadedSettings = settingsResult.data
+        ? normalizeSettings(
+            settingsFromDatabase(
+              settingsResult.data as unknown as Record<string, unknown>
+            )
+          )
+        : defaultStoreSettings;
+      setProducts(loadedProducts);
+      const currentDraft = draftStateRef.current;
+      const hasDirtyDraft =
+        currentDraft.editingProduct !== null ||
+        JSON.stringify(currentDraft.draftSettings) !== JSON.stringify(currentDraft.settings) ||
+        currentDraft.hoursTextarea !== currentDraft.settings.hours_lines.join("\n");
+      if (!background || !hasDirtyDraft) {
+        setSettings(loadedSettings);
+        setDraftSettings(loadedSettings);
+        setHoursTextarea(loadedSettings.hours_lines.join("\n"));
+      }
+      setSelectedPhotoProductId((currentId) =>
+        loadedProducts.some((product) => product.id === currentId)
+          ? currentId
+          : loadedProducts[0]?.id || ""
+      );
+      setCloudDataLoaded(true);
+      return { success: true, error: "" };
+    } catch (caught) {
+      const message = caught instanceof Error ? caught.message : "Falha de rede ao carregar a loja.";
+      setCloudLoadError(message);
+      return { success: false, error: message };
+    }
+  }, [supabase]);
 
   const appendAuditEntry = useCallback(
     (
@@ -175,6 +263,65 @@ export default function AdminPage() {
     []
   );
 
+  const authorizeCloudUser = useCallback(
+    async (user: { id: string; email?: string | null }) => {
+      if (!supabase) return false;
+      try {
+      const { error: claimError } = await supabase.rpc("claim_store_admin");
+      if (claimError) {
+        await supabase.auth.signOut();
+        setIsAuthenticated(false);
+        setLoginError(`Não foi possível validar o convite de administrador: ${claimError.message}`);
+        return false;
+      }
+
+      const { data: owner, error: ownerError } = await supabase
+        .from("store_owners")
+        .select("user_id")
+        .eq("user_id", user.id)
+        .maybeSingle();
+      if (ownerError || !owner) {
+        await supabase.auth.signOut();
+        setIsAuthenticated(false);
+        setLoginError(
+          ownerError
+            ? `Não foi possível verificar o acesso de administrador: ${ownerError.message}`
+            : "Este e-mail não tem acesso de administrador à loja. Peça um convite ao administrador principal."
+        );
+        return false;
+      }
+
+      const loadResult = await loadCloudData();
+      if (!loadResult.success) {
+        await supabase.auth.signOut();
+        setIsAuthenticated(false);
+        setLoginError(`Acesso validado, mas os dados da loja não carregaram. ${loadResult.error}`);
+        return false;
+      }
+
+      const label = user.email || "Administrador";
+      const expiresAt = Date.now() + SESSION_TTL_MS;
+      setAuthUserLabel(label);
+      setSessionExpiresAt(expiresAt);
+      setRemainingSessionMs(SESSION_TTL_MS);
+      setIsAuthenticated(true);
+      setLoginPass("");
+      appendAuditEntry("login_success", label, "Autenticação Supabase Auth e proprietário verificado");
+      return true;
+      } catch (caught) {
+        await supabase.auth.signOut();
+        setIsAuthenticated(false);
+        setLoginError(
+          caught instanceof Error
+            ? `Não foi possível validar o acesso: ${caught.message}`
+            : "Não foi possível validar o acesso de administrador."
+        );
+        return false;
+      }
+    },
+    [appendAuditEntry, loadCloudData, supabase]
+  );
+
   const handleLogout = useCallback(
     async (reason = "Sessão encerrada pelo administrador") => {
       sessionStorage.removeItem(adminSessionStorageKey);
@@ -190,26 +337,8 @@ export default function AdminPage() {
   );
 
   useEffect(() => {
+    let cancelled = false;
     try {
-      const savedProducts = localStorage.getItem(productsStorageKey);
-      if (savedProducts) {
-        const parsed = JSON.parse(savedProducts) as Partial<Product>[];
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const normalized = parsed.map((item, idx) => normalizeProduct(item, idx));
-          setProducts(normalized);
-          if (normalized[0]) setSelectedPhotoProductId(normalized[0].id);
-        }
-      }
-      const savedSettings = localStorage.getItem(settingsStorageKey);
-      if (savedSettings) {
-        const parsedSettings = normalizeSettings(
-          JSON.parse(savedSettings) as Partial<StoreSettings>
-        );
-        setSettings(parsedSettings);
-        setDraftSettings(parsedSettings);
-        setNewAdminUserInput(parsedSettings.admin_user || "admin");
-        setHoursTextarea(parsedSettings.hours_lines.join("\n"));
-      }
       const savedAudit = localStorage.getItem(adminAuditStorageKey);
       if (savedAudit) {
         const parsedAudit = JSON.parse(savedAudit) as AdminAuditEntry[];
@@ -222,43 +351,140 @@ export default function AdminPage() {
           setLockoutState(parsedLock);
         }
       }
-      const savedSessionRaw = sessionStorage.getItem(adminSessionStorageKey);
-      if (savedSessionRaw) {
-        const sessionObj = JSON.parse(savedSessionRaw) as AdminSessionPayload;
-        if (sessionObj && sessionObj.expiresAt > Date.now()) {
-          setIsAuthenticated(true);
-          setAuthUserLabel(sessionObj.user);
-          setSessionExpiresAt(sessionObj.expiresAt);
-          setRemainingSessionMs(sessionObj.expiresAt - Date.now());
-        } else {
-          sessionStorage.removeItem(adminSessionStorageKey);
+
+      if (localDemoMode) {
+        const savedProducts = localStorage.getItem(productsStorageKey);
+        if (savedProducts) {
+          const parsed = JSON.parse(savedProducts) as Partial<Product>[];
+          if (Array.isArray(parsed)) {
+            const normalized = parsed.map((item, idx) => normalizeProduct(item, idx));
+            setProducts(normalized);
+            if (normalized[0]) setSelectedPhotoProductId(normalized[0].id);
+          }
+        }
+        const savedSettings = localStorage.getItem(settingsStorageKey);
+        if (savedSettings) {
+          const parsedSettings = normalizeSettings(
+            JSON.parse(savedSettings) as Partial<StoreSettings>
+          );
+          setSettings(parsedSettings);
+          setDraftSettings(parsedSettings);
+          setNewAdminUserInput(parsedSettings.admin_user || "admin");
+          setHoursTextarea(parsedSettings.hours_lines.join("\n"));
+        }
+        setCloudDataLoaded(true);
+        const savedSessionRaw = sessionStorage.getItem(adminSessionStorageKey);
+        if (savedSessionRaw) {
+          const sessionObj = JSON.parse(savedSessionRaw) as AdminSessionPayload;
+          if (sessionObj && sessionObj.expiresAt > Date.now()) {
+            setIsAuthenticated(true);
+            setAuthUserLabel(sessionObj.user);
+            setSessionExpiresAt(sessionObj.expiresAt);
+            setRemainingSessionMs(sessionObj.expiresAt - Date.now());
+          } else {
+            sessionStorage.removeItem(adminSessionStorageKey);
+          }
         }
       }
     } catch {
       // ignore storage read error
     }
 
-    if (supabase) {
-      void supabase.auth.getUser().then(({ data }) => {
-        if (data.user?.email) {
-          const expiresAt = Date.now() + SESSION_TTL_MS;
-          const payload: AdminSessionPayload = {
-            user: data.user.email,
-            issuedAt: Date.now(),
-            expiresAt,
-            token: Math.random().toString(36).slice(2),
-          };
-          setIsAuthenticated(true);
-          setAuthUserLabel(data.user.email);
-          setSessionExpiresAt(expiresAt);
-          sessionStorage.setItem(adminSessionStorageKey, JSON.stringify(payload));
-        }
-        setAuthChecking(false);
-      });
-    } else {
+    if (!supabase) {
+      sessionStorage.removeItem(adminSessionStorageKey);
       setAuthChecking(false);
+      return () => {
+        cancelled = true;
+      };
     }
-  }, [supabase]);
+
+    sessionStorage.removeItem(adminSessionStorageKey);
+    const { data: authListener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "PASSWORD_RECOVERY" && session?.user) {
+        setPasswordlessSession(true);
+        window.setTimeout(() => {
+          void authorizeCloudUser(session.user).then((authorized) => {
+            if (!cancelled && authorized) setIsPasswordRecovery(true);
+          });
+        }, 0);
+      }
+      if (event === "SIGNED_OUT" && !cancelled) {
+        setIsAuthenticated(false);
+        setSessionExpiresAt(null);
+      }
+    });
+
+    void supabase.auth.getUser().then(async ({ data, error }) => {
+      if (cancelled) return;
+      if (!error && data.user) {
+        const authFlow = sessionStorage.getItem(adminAuthFlowStorageKey);
+        const authorized = await authorizeCloudUser(data.user);
+        if (!cancelled && authorized) {
+          setPasswordlessSession(authFlow === "email" || authFlow === "signup" || authFlow === "recovery");
+          sessionStorage.removeItem(adminAuthFlowStorageKey);
+        }
+      }
+      if (!cancelled) setAuthChecking(false);
+    }).catch((caught) => {
+      if (!cancelled) {
+        setLoginError(caught instanceof Error ? caught.message : "Não foi possível verificar a sessão Supabase.");
+        setAuthChecking(false);
+      }
+    });
+
+    return () => {
+      cancelled = true;
+      authListener.subscription.unsubscribe();
+    };
+  }, [authorizeCloudUser, localDemoMode, supabase]);
+
+  useEffect(() => {
+    if (!supabase || !isAuthenticated) return;
+    let refreshing = false;
+    const refreshCloudState = async () => {
+      if (refreshing || document.visibilityState === "hidden") return;
+      refreshing = true;
+      try {
+        const { data: authData, error: authError } = await supabase.auth.getUser();
+        if (authError || !authData.user) {
+          await supabase.auth.signOut();
+          setIsAuthenticated(false);
+          setCloudDataLoaded(false);
+          setLoginError("Sua sessão Supabase expirou. Entre novamente.");
+          return;
+        }
+        const { data: owner, error: ownerError } = await supabase
+          .from("store_owners")
+          .select("user_id")
+          .eq("user_id", authData.user.id)
+          .maybeSingle();
+        if (ownerError || !owner) {
+          await supabase.auth.signOut();
+          setIsAuthenticated(false);
+          setCloudDataLoaded(false);
+          setLoginError("O acesso de administrador foi removido ou não pôde ser verificado.");
+          return;
+        }
+        const loadResult = await loadCloudData(true);
+        if (!loadResult.success) {
+          showToast(`Falha ao atualizar os dados da loja. ${loadResult.error}`);
+        }
+      } finally {
+        refreshing = false;
+      }
+    };
+    const refreshWhenVisible = () => {
+      if (document.visibilityState === "visible") void refreshCloudState();
+    };
+    const poll = window.setInterval(() => void refreshCloudState(), 60_000);
+    window.addEventListener("focus", refreshWhenVisible);
+    document.addEventListener("visibilitychange", refreshWhenVisible);
+    return () => {
+      window.clearInterval(poll);
+      window.removeEventListener("focus", refreshWhenVisible);
+      document.removeEventListener("visibilitychange", refreshWhenVisible);
+    };
+  }, [cloudLoadError, isAuthenticated, loadCloudData, supabase]);
 
   // Live Lockout Countdown Timer
   useEffect(() => {
@@ -290,9 +516,9 @@ export default function AdminPage() {
     return (
       products.find((p) => p.id === selectedPhotoProductId) ||
       products[0] ||
-      initialProducts[0]
+      (localDemoMode ? initialProducts[0] : null)
     );
-  }, [products, selectedPhotoProductId]);
+  }, [localDemoMode, products, selectedPhotoProductId]);
 
   useEffect(() => {
     if (activePhotoProduct) {
@@ -401,87 +627,271 @@ export default function AdminPage() {
     }, 3400);
   };
 
+  const ensureCloudOwner = async () => {
+    if (!supabase || !isAuthenticated || !cloudDataLoaded) {
+      showToast("Aguarde o carregamento seguro dos dados antes de salvar.");
+      return false;
+    }
+    try {
+    const { data: authData, error: authError } = await supabase.auth.getUser();
+    if (authError || !authData.user) {
+      showToast("Sessão Supabase indisponível. Entre novamente para salvar.");
+      return false;
+    }
+    const { data: owner, error: ownerError } = await supabase
+      .from("store_owners")
+      .select("user_id")
+      .eq("user_id", authData.user.id)
+      .maybeSingle();
+    if (ownerError || !owner) {
+      showToast(
+        ownerError
+          ? `Falha ao verificar permissão: ${ownerError.message}`
+          : "Sua conta não tem permissão para editar esta loja."
+      );
+      return false;
+    }
+    return true;
+    } catch (caught) {
+      showToast(
+        caught instanceof Error
+          ? `Falha ao verificar a permissão: ${caught.message}`
+          : "Falha ao verificar a permissão para salvar."
+      );
+      return false;
+    }
+  };
+
   const persistProducts = async (next: Product[], deletedId?: string) => {
-    setProducts(next);
+    if (supabase) {
+      if (!(await ensureCloudOwner())) return false;
+      try {
+        const result = deletedId
+          ? await supabase.from("products").delete().eq("id", deletedId)
+          : await supabase.from("products").upsert(next.map(productToDatabase));
+        if (result.error) {
+          showToast(`Falha ao salvar produtos no Supabase: ${result.error.message}`);
+          return false;
+        }
+        setProducts(next);
+        return true;
+      } catch (caught) {
+        showToast(
+          caught instanceof Error
+            ? `Falha ao salvar produtos no Supabase: ${caught.message}`
+            : "Falha ao salvar produtos no Supabase."
+        );
+        return false;
+      }
+    }
+
+    if (!localDemoMode) {
+      showToast("Configuração do Supabase ausente. O modo local só funciona neste computador.");
+      return false;
+    }
     try {
       localStorage.setItem(productsStorageKey, JSON.stringify(next));
       window.dispatchEvent(new Event("storage"));
+      setProducts(next);
+      return true;
     } catch {
-      showToast("Imagem muito pesada para o navegador. Escolha outra mais leve.");
-      return;
+      showToast("Imagem muito pesada para salvar no navegador. Escolha outra mais leve.");
+      return false;
     }
-
-    if (!supabase) return;
-    const { data: authData } = await supabase.auth.getUser();
-    if (!authData.user) return;
-
-    if (deletedId) {
-      await supabase.from("products").delete().eq("id", deletedId);
-      return;
-    }
-
-    await supabase.from("products").upsert(
-      next.map((p) => ({
-        id: p.id,
-        name: p.name,
-        category: p.category,
-        description: p.description,
-        badge: p.badge,
-        price: p.price,
-        image: p.image,
-        published: p.published,
-        featured: p.featured,
-        variants: p.variants || [],
-        updated_at: new Date().toISOString(),
-      }))
-    );
   };
 
   const persistSettings = async (nextSettings: StoreSettings) => {
     const normalized = normalizeSettings(nextSettings);
-    setSettings(normalized);
-    setDraftSettings(normalized);
+    if (supabase) {
+      if (!(await ensureCloudOwner())) return false;
+      try {
+        const { error } = await supabase
+          .from("store_settings")
+          .upsert(settingsToDatabase(normalized));
+        if (error) {
+          showToast(`Falha ao salvar configurações no Supabase: ${error.message}`);
+          return false;
+        }
+      } catch (caught) {
+        showToast(
+          caught instanceof Error
+            ? `Falha ao salvar configurações no Supabase: ${caught.message}`
+            : "Falha ao salvar configurações no Supabase."
+        );
+        return false;
+      }
+      setSettings(normalized);
+      setDraftSettings(normalized);
+      showToast("Configurações sincronizadas!");
+      return true;
+    }
+    if (!localDemoMode) {
+      showToast("Configuração do Supabase ausente. O modo local só funciona neste computador.");
+      return false;
+    }
     try {
       localStorage.setItem(settingsStorageKey, JSON.stringify(normalized));
       window.dispatchEvent(new Event("storage"));
     } catch {
       showToast("Não foi possível salvar no navegador.");
-      return;
+      return false;
     }
 
-    if (!supabase) {
-      showToast("Alterações salvas e publicadas na vitrine!");
-      return;
-    }
-    const { data: authData } = await supabase.auth.getUser();
-    if (!authData.user) {
-      showToast("Alterações salvas na vitrine local!");
-      return;
-    }
+    setSettings(normalized);
+    setDraftSettings(normalized);
+    showToast("Alterações salvas e publicadas na vitrine!");
+    return true;
+  };
 
-    await supabase.from("store_settings").upsert({
-      id: true,
-      store_name: normalized.store_name,
-      hero_headline: normalized.hero_headline,
-      whatsapp_url: normalized.whatsapp_url,
-      whatsapp_phone: normalized.whatsapp_phone,
-      instagram_url: normalized.instagram_url,
-      instagram_handle: normalized.instagram_handle,
-      city: normalized.city,
-      address_line: normalized.address_line,
-      postal_code: normalized.postal_code,
-      maps_url: normalized.maps_url,
-      hours_lines: normalized.hours_lines,
-      custom_categories: normalized.custom_categories,
-      attendance_note: normalized.attendance_note,
-      updated_at: new Date().toISOString(),
+  const handleSendEmailCode = async () => {
+    if (!supabase) return;
+    const email = loginUser.trim().toLowerCase();
+    if (!email.includes("@")) {
+      setLoginError("Informe o e-mail do convite para receber o código.");
+      return;
+    }
+    setLoginError("");
+    setEmailActionMessage("");
+    const { error } = await supabase.auth.signInWithOtp({
+      email,
+      options: {
+        shouldCreateUser: true,
+        emailRedirectTo: `${window.location.origin}/admin`,
+      },
     });
-    showToast("Configurações sincronizadas!");
+    if (error) {
+      setLoginError(`Não foi possível enviar o código: ${error.message}`);
+      return;
+    }
+    sessionStorage.setItem(adminAuthFlowStorageKey, "email");
+    setEmailCodeSent(true);
+    setEmailActionMessage("Enviamos um código ou link seguro para o e-mail informado.");
+  };
+
+  const handleVerifyEmailCode = async () => {
+    if (!supabase) return;
+    const email = loginUser.trim().toLowerCase();
+    const token = emailCode.trim();
+    if (!email.includes("@") || !token) {
+      setLoginError("Informe o e-mail e o código recebido.");
+      return;
+    }
+    setLoginError("");
+    const { data, error } = await supabase.auth.verifyOtp({ email, token, type: "email" });
+    if (error || !data.user) {
+      setLoginError(`Não foi possível validar o código: ${error?.message || "usuário não autenticado"}`);
+      return;
+    }
+    setEmailCode("");
+    if (await authorizeCloudUser(data.user)) {
+      setPasswordlessSession(true);
+      sessionStorage.removeItem(adminAuthFlowStorageKey);
+    }
+  };
+
+  const handleCreateAccount = async () => {
+    if (!supabase) return;
+    const email = loginUser.trim().toLowerCase();
+    if (!email.includes("@") || loginPass.length < 12) {
+      setLoginError("Informe o e-mail convidado e uma senha com pelo menos 12 caracteres.");
+      return;
+    }
+    setLoginError("");
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password: loginPass,
+      options: { emailRedirectTo: `${window.location.origin}/admin` },
+    });
+    if (error) {
+      setLoginError(`Não foi possível criar a conta Supabase: ${error.message}`);
+      return;
+    }
+    sessionStorage.setItem(adminAuthFlowStorageKey, "signup");
+    setLoginPass("");
+    if (data.session && data.user) {
+      if (await authorizeCloudUser(data.user)) {
+        setPasswordlessSession(true);
+        sessionStorage.removeItem(adminAuthFlowStorageKey);
+      }
+    } else {
+      setEmailActionMessage("Confira o e-mail e confirme a conta antes de voltar ao painel.");
+    }
+  };
+
+  const handleSendPasswordRecovery = async () => {
+    if (!supabase) return;
+    const email = loginUser.trim().toLowerCase();
+    if (!email.includes("@")) {
+      setLoginError("Informe o e-mail da conta para receber o link de redefinição.");
+      return;
+    }
+    setLoginError("");
+    const { error } = await supabase.auth.resetPasswordForEmail(email, {
+      redirectTo: `${window.location.origin}/admin`,
+    });
+    if (!error) sessionStorage.setItem(adminAuthFlowStorageKey, "recovery");
+    setEmailActionMessage(
+      error
+        ? `Não foi possível enviar o link: ${error.message}`
+        : "Se a conta puder redefinir a senha, enviaremos um link seguro por e-mail."
+    );
+  };
+
+  const handleSetRecoveredPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!supabase) return;
+    if (newPinInput.length < 12) {
+      setSecurityMsg("Use pelo menos 12 caracteres para a senha.");
+      return;
+    }
+    if (newPinInput !== confirmNewPinInput) {
+      setSecurityMsg("A confirmação da senha não confere.");
+      return;
+    }
+    const { error } = await supabase.auth.updateUser({ password: newPinInput });
+    if (error) {
+      setSecurityMsg(`Não foi possível atualizar a senha: ${error.message}`);
+      return;
+    }
+    setNewPinInput("");
+    setConfirmNewPinInput("");
+    setIsPasswordRecovery(false);
+    setPasswordlessSession(false);
+    sessionStorage.removeItem(adminAuthFlowStorageKey);
+    setSecurityMsg("");
+    showToast("Senha da conta Supabase atualizada.");
   };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError("");
+
+    if (supabase) {
+      const email = loginUser.trim().toLowerCase();
+      if (!email.includes("@") || !loginPass) {
+        setLoginError("Informe o e-mail e a senha da conta Supabase.");
+        return;
+      }
+      const { data, error } = await supabase.auth.signInWithPassword({
+        email,
+        password: loginPass,
+      });
+      if (error || !data.user) {
+        setLoginError(`Falha na autenticação Supabase: ${error?.message || "credenciais inválidas"}`);
+        return;
+      }
+      sessionStorage.setItem(adminAuthFlowStorageKey, "password");
+      if (await authorizeCloudUser(data.user)) {
+        setPasswordlessSession(false);
+        sessionStorage.removeItem(adminAuthFlowStorageKey);
+      }
+      return;
+    }
+
+    if (!localDemoMode) {
+      setLoginError("Conexão do Supabase ausente. Configure URL e chave pública para habilitar o painel.");
+      return;
+    }
 
     if (lockoutState.lockUntil > Date.now()) {
       const waitSec = Math.ceil((lockoutState.lockUntil - Date.now()) / 1000);
@@ -515,35 +925,6 @@ export default function AdminPage() {
       setLoginPass("");
       appendAuditEntry("login_success", label, "Autenticação validada via SHA-256");
       return;
-    }
-
-    if (supabase && trimmedUser.includes("@")) {
-      const { data, error } = await supabase.auth.signInWithPassword({
-        email: trimmedUser,
-        password: loginPass,
-      });
-      if (!error && data.user) {
-        const cleanLock: AdminLockoutState = { attempts: 0, lockUntil: 0 };
-        setLockoutState(cleanLock);
-        localStorage.setItem(adminLockoutStorageKey, JSON.stringify(cleanLock));
-
-        const label = data.user.email || trimmedUser;
-        const expiresAt = Date.now() + SESSION_TTL_MS;
-        const sessionPayload: AdminSessionPayload = {
-          user: label,
-          issuedAt: Date.now(),
-          expiresAt,
-          token: Math.random().toString(36).slice(2),
-        };
-        sessionStorage.setItem(adminSessionStorageKey, JSON.stringify(sessionPayload));
-        setAuthUserLabel(label);
-        setSessionExpiresAt(expiresAt);
-        setRemainingSessionMs(SESSION_TTL_MS);
-        setIsAuthenticated(true);
-        setLoginPass("");
-        appendAuditEntry("login_success", label, "Autenticação Supabase Auth");
-        return;
-      }
     }
 
     const nextAttempts = lockoutState.attempts + 1;
@@ -584,6 +965,42 @@ export default function AdminPage() {
   const handleUpdateSecurityCredentials = async (e: React.FormEvent) => {
     e.preventDefault();
     setSecurityMsg("");
+    if (supabase) {
+      if (!(await ensureCloudOwner())) return;
+      if (newPinInput.length < 12) {
+        setSecurityMsg("Use pelo menos 12 caracteres para a senha da conta Supabase.");
+        return;
+      }
+      if (newPinInput !== confirmNewPinInput) {
+        setSecurityMsg("A confirmação da nova senha não confere.");
+        return;
+      }
+      if (currentPinInput) {
+        const { error: verifyError } = await supabase.auth.signInWithPassword({
+          email: authUserLabel,
+          password: currentPinInput,
+        });
+        if (verifyError) {
+          setSecurityMsg("A senha atual da conta Supabase está incorreta.");
+          return;
+        }
+      } else if (!passwordlessSession) {
+        setSecurityMsg("Informe a senha atual da conta Supabase para confirmar a alteração.");
+        return;
+      }
+      const { error } = await supabase.auth.updateUser({ password: newPinInput });
+      if (error) {
+        setSecurityMsg(`Não foi possível atualizar a senha da conta Supabase: ${error.message}`);
+        return;
+      }
+      setCurrentPinInput("");
+      setNewPinInput("");
+      setConfirmNewPinInput("");
+      setPasswordlessSession(false);
+      appendAuditEntry("credentials_updated", authUserLabel, "Senha da conta Supabase atualizada");
+      setSecurityMsg("Senha da conta Supabase atualizada com sucesso.");
+      return;
+    }
     const verified = await verifyAdminCredentials(
       settings.admin_user || "admin",
       currentPinInput,
@@ -608,7 +1025,7 @@ export default function AdminPage() {
       admin_pin: "",
       admin_pin_hash: newHash,
     };
-    await persistSettings(updatedSettings);
+    if (!(await persistSettings(updatedSettings))) return;
     setCurrentPinInput("");
     setNewPinInput("");
     setConfirmNewPinInput("");
@@ -624,8 +1041,8 @@ export default function AdminPage() {
   const handleRepairAllLinksAndImages = async () => {
     const repairedProducts = products.map((p, idx) => normalizeProduct(p, idx));
     const repairedSettings = normalizeSettings(settings);
-    await persistProducts(repairedProducts);
-    await persistSettings(repairedSettings);
+    if (!(await persistProducts(repairedProducts))) return;
+    if (!(await persistSettings(repairedSettings))) return;
     appendAuditEntry(
       "links_repaired",
       authUserLabel,
@@ -640,7 +1057,7 @@ export default function AdminPage() {
     const next = products.map((p) =>
       p.id === activePhotoProduct.id ? { ...p, ...patch } : p
     );
-    await persistProducts(next);
+    if (!(await persistProducts(next))) return;
     if (toastMsg) showToast(toastMsg);
   };
 
@@ -658,7 +1075,7 @@ export default function AdminPage() {
       const next = products.map((p) =>
         p.id === idToUpdate ? { ...p, image: dataUrl } : p
       );
-      await persistProducts(next);
+      if (!(await persistProducts(next))) return;
 
       const nextGallery = [
         {
@@ -668,7 +1085,7 @@ export default function AdminPage() {
         },
         ...(settings.custom_gallery || studioGallery),
       ];
-      await persistSettings({ ...settings, custom_gallery: nextGallery });
+      if (!(await persistSettings({ ...settings, custom_gallery: nextGallery }))) return;
       setNewGalleryLabel("");
       showToast("Nova foto enviada e aplicada ao produto!");
     } catch {
@@ -700,7 +1117,7 @@ export default function AdminPage() {
       const slides = [...(settings.hero_slides || defaultStoreSettings.hero_slides)];
       if (!slides[selectedHeroIdx]) return;
       slides[selectedHeroIdx] = { ...slides[selectedHeroIdx], image: dataUrl };
-      await persistSettings({ ...settings, hero_slides: slides });
+      if (!(await persistSettings({ ...settings, hero_slides: slides }))) return;
       showToast("Foto do destaque principal atualizada!");
     } catch {
       showToast("Erro ao processar foto do destaque.");
@@ -737,7 +1154,7 @@ export default function AdminPage() {
       const nextCats = Array.from(
         new Set([...(settings.custom_categories || allCategories), finalCat])
       );
-      await persistSettings({ ...settings, custom_categories: nextCats });
+      if (!(await persistSettings({ ...settings, custom_categories: nextCats }))) return;
     }
 
     const parsedVariants = variantsText
@@ -759,7 +1176,7 @@ export default function AdminPage() {
       ? products.map((p) => (p.id === savedProd.id ? savedProd : p))
       : [savedProd, ...products];
 
-    await persistProducts(next);
+    if (!(await persistProducts(next))) return;
     setEditingProduct(null);
     setInlineNewCategory("");
     showToast("Produto salvo com sucesso!");
@@ -772,7 +1189,7 @@ export default function AdminPage() {
     const nextCats = Array.from(
       new Set([...(settings.custom_categories || allCategories), cleaned])
     );
-    await persistSettings({ ...settings, custom_categories: nextCats });
+    if (!(await persistSettings({ ...settings, custom_categories: nextCats }))) return;
     setNewCategoryName("");
     showToast(`Categoria "${cleaned}" criada!`);
   };
@@ -789,10 +1206,10 @@ export default function AdminPage() {
 
   const handleRemoveCategory = async (catName: string) => {
     const nextCats = allCategories.filter((c) => c !== catName);
-    await persistSettings({
+    if (!(await persistSettings({
       ...settings,
       custom_categories: nextCats.length > 0 ? nextCats : defaultProductCategories,
-    });
+    }))) return;
     showToast(`Categoria "${catName}" removida.`);
   };
 
@@ -819,8 +1236,60 @@ export default function AdminPage() {
     );
   }
 
+  if (isPasswordRecovery && supabase) {
+    return (
+      <main className="admin-route-shell">
+        <div className="admin-auth-card">
+          <h1>Definir senha da conta Supabase</h1>
+          <p>Use pelo menos 12 caracteres para concluir a recuperação da conta de administrador.</p>
+          <form className="admin-auth-form" onSubmit={(e) => void handleSetRecoveredPassword(e)}>
+            <label>
+              Nova senha
+              <input
+                type="password"
+                required
+                minLength={12}
+                autoComplete="new-password"
+                value={newPinInput}
+                onChange={(e) => setNewPinInput(e.target.value)}
+              />
+            </label>
+            <label>
+              Confirmar nova senha
+              <input
+                type="password"
+                required
+                minLength={12}
+                autoComplete="new-password"
+                value={confirmNewPinInput}
+                onChange={(e) => setConfirmNewPinInput(e.target.value)}
+              />
+            </label>
+            {securityMsg && <p className="admin-auth-error">{securityMsg}</p>}
+            <button type="submit" className="button button-lime admin-auth-submit">
+              <Lock size={16} /> Atualizar senha
+            </button>
+          </form>
+        </div>
+      </main>
+    );
+  }
+
   if (!isAuthenticated) {
-    const isLockedOut = lockoutRemainingSec > 0;
+    if (!supabase && !localDemoMode) {
+      return (
+        <main className="admin-route-shell">
+          <div className="admin-auth-card">
+            <h1>Painel não configurado</h1>
+            <p>Conexão do Supabase ausente. Configure NEXT_PUBLIC_SUPABASE_URL e NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY.</p>
+            <Link href="/" className="admin-back-store">
+              <ArrowLeft size={15} /> Voltar para a vitrine pública
+            </Link>
+          </div>
+        </main>
+      );
+    }
+    const isLockedOut = !supabase && lockoutRemainingSec > 0;
     return (
       <main className="admin-route-shell">
         <div className="admin-auth-card">
@@ -835,42 +1304,42 @@ export default function AdminPage() {
             </span>
             <div>
               <h1>Acesso Restrito · WPlay</h1>
-              <p>
-                {settings.store_name} · Autenticação Criptografada
-              </p>
+              <p>{settings.store_name} · {supabase ? "Conta protegida pelo Supabase Auth" : "Demonstração local"}</p>
             </div>
           </div>
 
           <div className="admin-security-banner">
             <ShieldCheck size={15} />
             <span>
-              Rota oculta protegida por hash SHA-256, limite de tentativas e sessão com expiração automática.
+              {supabase
+                ? "Entre com o e-mail e a senha da conta Supabase vinculada a um convite de administrador."
+                : "Demonstração local protegida por hash SHA-256 e sessão com expiração automática."}
             </span>
           </div>
 
           <form className="admin-auth-form" onSubmit={(e) => void handleLogin(e)}>
             <label>
-              Identificação do Administrador
+              {supabase ? "E-mail da conta Supabase" : "Identificação do Administrador"}
               <input
-                type="text"
+                type={supabase ? "email" : "text"}
                 required
-                autoComplete="username"
+                autoComplete={supabase ? "username" : "username"}
                 disabled={isLockedOut}
-                placeholder="Digite seu usuário ou e-mail"
+                placeholder={supabase ? "admin@exemplo.com" : "Digite seu usuário ou e-mail"}
                 value={loginUser}
                 onChange={(e) => setLoginUser(e.target.value)}
               />
             </label>
 
             <label>
-              Chave de Segurança
+              {supabase ? "Senha da conta Supabase" : "Chave de Segurança"}
               <div className="admin-pass-input-wrap">
                 <input
                   type={showLoginPass ? "text" : "password"}
                   required
                   autoComplete="current-password"
                   disabled={isLockedOut}
-                  placeholder="Digite sua senha de acesso"
+                  placeholder={supabase ? "Senha da conta" : "Digite sua senha de acesso"}
                   value={loginPass}
                   onChange={(e) => setLoginPass(e.target.value)}
                 />
@@ -895,9 +1364,41 @@ export default function AdminPage() {
               <Lock size={16} />
               {isLockedOut
                 ? `Bloqueado (${lockoutRemainingSec}s)`
-                : "Desbloquear Painel Admin"}
+                : supabase ? "Entrar com senha" : "Desbloquear Painel Admin"}
             </button>
           </form>
+
+          {supabase && (
+            <div className="admin-auth-form">
+              <button type="button" className="button button-outline" onClick={() => void handleSendEmailCode()}>
+                Receber código ou link por e-mail
+              </button>
+              {emailCodeSent && (
+                <>
+                  <label>
+                    Código recebido por e-mail
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      autoComplete="one-time-code"
+                      value={emailCode}
+                      onChange={(e) => setEmailCode(e.target.value)}
+                    />
+                  </label>
+                  <button type="button" className="button button-lime" onClick={() => void handleVerifyEmailCode()}>
+                    Validar código
+                  </button>
+                </>
+              )}
+              <button type="button" className="button button-outline" onClick={() => void handleCreateAccount()}>
+                Primeiro acesso: criar conta Supabase
+              </button>
+              <button type="button" className="button button-outline" onClick={() => void handleSendPasswordRecovery()}>
+                Esqueci minha senha
+              </button>
+              {emailActionMessage && <p className="admin-security-feedback">{emailActionMessage}</p>}
+            </div>
+          )}
 
           <Link href="/" className="admin-back-store">
             <ArrowLeft size={15} /> Voltar para a vitrine pública
@@ -913,6 +1414,11 @@ export default function AdminPage() {
 
   return (
     <main className="admin-dashboard">
+      {cloudLoadError && (
+        <div className="admin-security-banner" role="alert">
+          <AlertTriangle size={15} /> <span>Falha ao atualizar o catálogo: {cloudLoadError}</span>
+        </div>
+      )}
       <header className="admin-topbar">
         <div className="admin-topbar-left">
           <span className="brand-logo-ring">
@@ -1590,9 +2096,11 @@ export default function AdminPage() {
                             className="admin-delete-confirm"
                             onClick={() => {
                               const next = products.filter((item) => item.id !== p.id);
-                              void persistProducts(next, p.id);
-                              setConfirmDeleteId(null);
-                              showToast("Produto removido.");
+                              void (async () => {
+                                if (!(await persistProducts(next, p.id))) return;
+                                setConfirmDeleteId(null);
+                                showToast("Produto removido.");
+                              })();
                             }}
                           >
                             Confirmar exclusão
@@ -1762,16 +2270,70 @@ export default function AdminPage() {
               <div className="admin-products-head">
                 <div>
                   <h2>
-                    <KeyRound size={18} /> Credenciais Criptografadas & Rota Oculta
+                    <KeyRound size={18} /> {supabase ? "Conta Supabase & acesso da equipe" : "Credenciais locais & rota oculta"}
                   </h2>
                   <p className="admin-sub">
-                    O link de administração foi ocultado da loja pública. Use{" "}
-                    <strong>Ctrl + Shift + A</strong> no teclado ou toque{" "}
-                    <strong>5 vezes seguidas</strong> na logo do rodapé para abrir este painel.
+                    {supabase
+                      ? <>Conta conectada: <strong>{authUserLabel}</strong>. A senha é gerenciada pelo Supabase Auth.</>
+                      : <>O link de administração foi ocultado da loja pública. Use <strong>Ctrl + Shift + A</strong> no teclado ou toque <strong>5 vezes seguidas</strong> na logo do rodapé para abrir este painel.</>}
                   </p>
                 </div>
               </div>
 
+              {supabase && (
+                <>
+                  <form
+                    className="product-form"
+                    onSubmit={(e) => void handleUpdateSecurityCredentials(e)}
+                  >
+                    <p className="admin-sub">
+                      Altere a senha da conta Supabase. Confirme a senha atual; deixe esse campo vazio somente se entrou por código ou link de recuperação.
+                    </p>
+                    <div className="form-row-2">
+                      <label>
+                        Senha atual da conta Supabase
+                        <input
+                          type="password"
+                          required={!passwordlessSession}
+                          autoComplete="current-password"
+                          placeholder="Vazio se autenticado por e-mail"
+                          value={currentPinInput}
+                          onChange={(e) => setCurrentPinInput(e.target.value)}
+                        />
+                      </label>
+                      <label>
+                        Nova senha (mín. 12 caracteres)
+                        <input
+                          type="password"
+                          required
+                          minLength={12}
+                          autoComplete="new-password"
+                          value={newPinInput}
+                          onChange={(e) => setNewPinInput(e.target.value)}
+                        />
+                      </label>
+                    </div>
+                    <label>
+                      Confirmar nova senha
+                      <input
+                        type="password"
+                        required
+                        minLength={12}
+                        autoComplete="new-password"
+                        value={confirmNewPinInput}
+                        onChange={(e) => setConfirmNewPinInput(e.target.value)}
+                      />
+                    </label>
+                    {securityMsg && <p className="admin-security-feedback">{securityMsg}</p>}
+                    <button type="submit" className="button button-lime">
+                      <Save size={16} /> Atualizar senha Supabase
+                    </button>
+                  </form>
+                  <AdminAccessManager supabase={supabase} />
+                </>
+              )}
+
+              {!supabase && (
               <form
                 className="product-form"
                 onSubmit={(e) => void handleUpdateSecurityCredentials(e)}
@@ -1839,6 +2401,7 @@ export default function AdminPage() {
                   <Save size={16} /> Atualizar Senha Criptografada
                 </button>
               </form>
+              )}
             </section>
 
             {/* 3. Security Audit Log */}
@@ -1900,9 +2463,11 @@ export default function AdminPage() {
                   type="button"
                   className="button button-quiet"
                   onClick={() => {
-                    void persistProducts(initialProducts);
-                    void persistSettings(defaultStoreSettings);
-                    showToast("Padrões originais restaurados!");
+                    void (async () => {
+                      if (!(await persistProducts(initialProducts))) return;
+                      if (!(await persistSettings(defaultStoreSettings))) return;
+                      showToast("Padrões originais restaurados!");
+                    })();
                   }}
                 >
                   <RotateCcw size={15} /> Restaurar Padrões

@@ -2,14 +2,25 @@
   "name": "wplay-ipaussu",
   "version": "1.0.0",
   "private": true,
-  "scripts": { "dev": "next dev", "build": "next build", "start": "next start" },
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
   "dependencies": {
     "@supabase/ssr": "^0.6.1",
     "@supabase/supabase-js": "^2.49.4",
     "lucide-react": "^0.468.0",
     "next": "15.2.4",
     "react": "^19.0.0",
-    "react-dom": "^19.0.0"
+    "react-dom": "^19.0.0",
+    "three": "^0.186.1"
   },
-  "devDependencies": { "@types/node": "^22.13.10", "@types/react": "^19.0.10", "@types/react-dom": "^19.0.4", "typescript": "^5.8.2" }
+  "devDependencies": {
+    "@types/node": "^22.13.10",
+    "@types/react": "^19.0.10",
+    "@types/react-dom": "^19.0.4",
+    "@types/three": "^0.186.0",
+    "typescript": "^5.8.2"
+  }
 }

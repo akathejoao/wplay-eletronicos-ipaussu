@@ -3403,24 +3403,24 @@ a {
 
 /* Expanded Quicklook Sheet for 3D iPhone Studio */
 .quicklook-sheet-3d {
-  width: min(1040px, 100%) !important;
-  grid-template-columns: 1.05fr 1.15fr !important;
+  width: min(1040px, 100%);
+  grid-template-columns: 1.05fr 1.15fr;
   border-radius: 26px;
 }
 
 .quicklook-media-3d {
-  min-height: 520px !important;
+  min-height: 520px;
   display: flex;
   flex-direction: column;
   background:
     radial-gradient(380px 320px at 50% 42%, rgba(199, 244, 80, 0.14), transparent 72%),
-    linear-gradient(165deg, #0b120e 0%, #050806 100%) !important;
+    linear-gradient(165deg, #0b120e 0%, #050806 100%);
   border-right: 1px solid rgba(199, 244, 80, 0.16);
 }
 
 .quicklook-content-3d {
-  padding: 24px 26px !important;
-  gap: 11px !important;
+  padding: 24px 26px;
+  gap: 11px;
   max-height: 90vh;
   overflow-y: auto;
 }
@@ -4136,10 +4136,10 @@ a {
 
   .iphone-config-bar,
   .quicklook-sheet-3d {
-    grid-template-columns: 1fr !important;
+    grid-template-columns: 1fr;
   }
 
   .quicklook-media-3d {
-    min-height: 400px !important;
+    min-height: 400px;
   }
 }

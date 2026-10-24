@@ -21,6 +21,18 @@ export function Iphone3DStudio({
   const [rotX, setRotX] = useState<number>(-7);
   const [autoSpin, setAutoSpin] = useState<boolean>(false);
   const [isInteracting, setIsInteracting] = useState<boolean>(false);
+  const [reducedMotion, setReducedMotion] = useState(false);
+
+  useEffect(() => {
+    const preference = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const updatePreference = () => {
+      setReducedMotion(preference.matches);
+      if (preference.matches) setAutoSpin(false);
+    };
+    updatePreference();
+    preference.addEventListener("change", updatePreference);
+    return () => preference.removeEventListener("change", updatePreference);
+  }, []);
 
   // Subtle entrance / model change pose
   useEffect(() => {
@@ -31,7 +43,7 @@ export function Iphone3DStudio({
 
   // Optional continuous 360 turntable spin
   useEffect(() => {
-    if (!autoSpin || isInteracting) return;
+    if (!autoSpin || isInteracting || reducedMotion) return;
     let raf = 0;
     const step = () => {
       setRotY((prev) => {
@@ -42,9 +54,10 @@ export function Iphone3DStudio({
     };
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
-  }, [autoSpin, isInteracting]);
+  }, [autoSpin, isInteracting, reducedMotion]);
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (reducedMotion || (e.target as HTMLElement).closest("button, input")) return;
     const rect = e.currentTarget.getBoundingClientRect();
     const normX = (e.clientX - rect.left) / rect.width; // 0 to 1
     const normY = (e.clientY - rect.top) / rect.height; // 0 to 1
@@ -88,11 +101,13 @@ export function Iphone3DStudio({
       {/* Top Studio HUD */}
       <div className="iphone3d-hud-top">
         <span className="iphone3d-badge">
-          <Sparkles size={12} /> GIRO 360° INTERATIVO · MOVA O MOUSE
+          <Sparkles size={12} /> Modelo ilustrativo · Arraste para girar
         </span>
         <button
           type="button"
           className={autoSpin ? "iphone3d-spin-btn active" : "iphone3d-spin-btn"}
+          disabled={reducedMotion}
+          aria-pressed={autoSpin}
           onClick={(e) => {
             e.stopPropagation();
             setAutoSpin((prev) => !prev);
@@ -267,14 +282,14 @@ export function Iphone3DStudio({
             className={Math.abs(rotY) >= 45 && Math.abs(rotY) < 135 ? "active" : ""}
             onClick={() => setPresetAngle(78, -4)}
           >
-            Lateral Titânio
+            Lateral
           </button>
           <button
             type="button"
             className={Math.abs(rotY) >= 135 ? "active" : ""}
             onClick={() => setPresetAngle(162, -6)}
           >
-            Câmeras (Traseira)
+            Traseira
           </button>
         </div>
 

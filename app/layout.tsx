@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import "./globals.css";
+import "./storefront.css";
+import "./atmosphere.css";
 
 export const metadata: Metadata = {
   title: "WPlay Eletrônicos | Ipaussu",

@@ -24,8 +24,8 @@ create table if not exists public.store_settings (
   id boolean primary key default true check (id),
   store_name text not null default 'WPlay Eletrônicos',
   hero_headline text not null default 'Toque, escolha e chame no WhatsApp.',
-  whatsapp_url text not null default 'https://wa.me/message/AYTWXK3N666EC1',
-  whatsapp_phone text,
+  whatsapp_url text not null default 'https://wa.me/5514996747344',
+  whatsapp_phone text default '5514996747344',
   instagram_url text not null default 'https://www.instagram.com/wplayeletronicosipaussu/',
   instagram_handle text not null default '@wplayeletronicosipaussu',
   city text not null default 'Ipaussu — SP',
@@ -41,6 +41,11 @@ create table if not exists public.store_settings (
 alter table public.store_settings add column if not exists store_name text not null default 'WPlay Eletrônicos';
 alter table public.store_settings add column if not exists hero_headline text not null default 'Toque, escolha e chame no WhatsApp.';
 alter table public.store_settings add column if not exists whatsapp_phone text;
+alter table public.store_settings alter column whatsapp_url set default 'https://wa.me/5514996747344';
+alter table public.store_settings alter column whatsapp_phone set default '5514996747344';
+update public.store_settings
+set whatsapp_url = 'https://wa.me/5514996747344', whatsapp_phone = '5514996747344'
+where whatsapp_url = 'https://wa.me/message/AYTWXK3N666EC1';
 alter table public.store_settings add column if not exists instagram_handle text not null default '@wplayeletronicosipaussu';
 alter table public.store_settings add column if not exists city text not null default 'Ipaussu — SP';
 alter table public.store_settings add column if not exists address_line text not null default 'R. Washington Luís, 887';

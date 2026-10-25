@@ -30,7 +30,7 @@ export function productFromDatabase(row: Record<string, unknown>): Partial<Produ
   };
 }
 
-export function productToDatabase(product: Product) {
+export function productToDatabase(product: Product, options?: { includeExtendedColumns?: boolean }) {
   const row: Record<string, unknown> = {
     id: product.id,
     name: product.name,
@@ -48,9 +48,11 @@ export function productToDatabase(product: Product) {
     updated_at: new Date().toISOString(),
   };
 
-  if (product.pricePix !== undefined) row.price_pix = product.pricePix;
-  if (product.installments !== undefined) row.installments = product.installments;
-  if (product.stockQuantity !== undefined) row.stock_quantity = product.stockQuantity;
+  if (options?.includeExtendedColumns !== false) {
+    if (product.pricePix !== undefined) row.price_pix = product.pricePix;
+    if (product.installments !== undefined) row.installments = product.installments;
+    if (product.stockQuantity !== undefined) row.stock_quantity = product.stockQuantity;
+  }
 
   return row;
 }
@@ -58,22 +60,22 @@ export function productToDatabase(product: Product) {
 export function settingsFromDatabase(row: Record<string, unknown>): Partial<StoreSettings> {
   return {
     id: true,
-    store_name: row.store_name as string,
-    logo_url: row.logo_url as string,
-    hero_headline: row.hero_headline as string,
-    whatsapp_url: row.whatsapp_url as string,
-    whatsapp_phone: row.whatsapp_phone as string | null,
-    instagram_url: row.instagram_url as string,
-    instagram_handle: row.instagram_handle as string,
-    city: row.city as string,
-    address_line: row.address_line as string,
-    postal_code: row.postal_code as string,
-    maps_url: row.maps_url as string,
-    hours_lines: row.hours_lines as string[],
-    custom_categories: row.custom_categories as string[],
-    custom_gallery: row.custom_gallery as StudioPhoto[],
-    hero_slides: row.hero_slides as HeroSlideConfig[],
-    attendance_note: row.attendance_note as string,
+    store_name: row.store_name as string | undefined,
+    logo_url: row.logo_url as string | undefined,
+    hero_headline: row.hero_headline as string | undefined,
+    whatsapp_url: row.whatsapp_url as string | undefined,
+    whatsapp_phone: row.whatsapp_phone as string | null | undefined,
+    instagram_url: row.instagram_url as string | undefined,
+    instagram_handle: row.instagram_handle as string | undefined,
+    city: row.city as string | undefined,
+    address_line: row.address_line as string | undefined,
+    postal_code: row.postal_code as string | undefined,
+    maps_url: row.maps_url as string | undefined,
+    hours_lines: row.hours_lines as string[] | undefined,
+    custom_categories: row.custom_categories as string[] | undefined,
+    custom_gallery: row.custom_gallery as StudioPhoto[] | undefined,
+    hero_slides: row.hero_slides as HeroSlideConfig[] | undefined,
+    attendance_note: row.attendance_note as string | undefined,
   };
 }
 

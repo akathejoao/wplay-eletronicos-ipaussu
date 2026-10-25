@@ -922,9 +922,12 @@ export default function AdminPage() {
       }
       if (!(await ensureCloudOwner())) return false;
       try {
-        const result = deletedId
+        let result = deletedId
           ? await supabase.from("products").delete().eq("id", deletedId).select("id")
-          : await supabase.from("products").upsert(changedProducts.map(productToDatabase));
+          : await supabase.from("products").upsert(changedProducts.map((p) => productToDatabase(p)));
+        if (!deletedId && result.error && result.error.message?.toLowerCase().includes("column")) {
+          result = await supabase.from("products").upsert(changedProducts.map((p) => productToDatabase(p, { includeExtendedColumns: false })));
+        }
         if (result.error) {
           showToast(`Falha ao salvar produtos online: ${result.error.message}`);
           return false;

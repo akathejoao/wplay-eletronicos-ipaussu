@@ -81,7 +81,7 @@ import {
   settingsToDatabase,
 } from "@/lib/catalog-repository";
 import { AdminAccessManager } from "@/app/components/AdminAccessManager";
-import { buildFollowUpWhatsAppHref, getStoredLeads, loadLeads, updateLeadStatus } from "@/lib/catalog-crm";
+import { buildFollowUpWhatsAppHref, deleteCustomerLead, exportLeadsToCsv, FollowUpTemplateKey, getStoredLeads, loadLeads, updateLeadStatus } from "@/lib/catalog-crm";
 
 type AdminTab = "fotos" | "produtos" | "categorias" | "crm" | "push" | "seguranca" | "config";
 type PhotoFramingDraft = {
@@ -183,6 +183,7 @@ export default function AdminPage() {
   const [crmSearch, setCrmSearch] = useState<string>("");
   const [editingLeadNoteId, setEditingLeadNoteId] = useState<string | null>(null);
   const [leadNoteDraft, setLeadNoteDraft] = useState<string>("");
+  const [leadTemplateChoices, setLeadTemplateChoices] = useState<Record<string, FollowUpTemplateKey>>({});
 
   // Push Notifications state ("push" tab)
   const [pushCampaigns, setPushCampaigns] = useState<PushNotificationCampaign[]>([]);
@@ -273,6 +274,48 @@ export default function AdminPage() {
     if (ok) {
       setLeads(getStoredLeads());
       showToast("Status do cliente atualizado!");
+    }
+  };
+
+
+  const handleQuickStockAdjust = async (productId: string, delta: number) => {
+    const target = products.find((p) => p.id === productId);
+    if (!target) return;
+    const currentQty = target.stockQuantity ?? 5;
+    const nextQty = Math.max(0, currentQty + delta);
+    const updated = products.map((p) =>
+      p.id === productId ? { ...p, stockQuantity: nextQty } : p
+    );
+    const ok = await persistProducts(updated);
+    if (ok) {
+      showToast(`${target.name}: estoque ajustado para ${nextQty} un.`);
+    }
+  };
+
+  const handleExportLeadsCsv = () => {
+    if (leads.length === 0) {
+      showToast("Nenhum lead registrado para exportar.");
+      return;
+    }
+    const csvContent = exportLeadsToCsv(leads);
+    const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", `leads-wplay-${new Date().toISOString().slice(0, 10)}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+    showToast("Planilha de contatos exportada!");
+  };
+
+  const handleDeleteLead = async (id: string) => {
+    if (!window.confirm("Remover este contato do CRM?")) return;
+    const ok = await deleteCustomerLead(id, supabase);
+    if (ok) {
+      setLeads(getStoredLeads());
+      showToast("Contato removido do CRM.");
     }
   };
 

@@ -179,21 +179,66 @@ export async function updateLeadStatus(
   }
 }
 
+export async function deleteCustomerLead(
+  id: string,
+  supabase?: SupabaseClient | null
+): Promise<boolean> {
+  if (supabase) {
+    try {
+      await supabase.from("customer_leads").delete().eq("id", id);
+    } catch {}
+  }
+  try {
+    const existing = getStoredLeads();
+    const updated = existing.filter((lead) => lead.id !== id);
+    localStorage.setItem(leadsStorageKey, JSON.stringify(updated));
+    window.dispatchEvent(new Event("wplay-leads-updated"));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export type FollowUpTemplateKey = "default" | "pix" | "reposicao" | "retirada" | "negociacao";
+
 export function buildFollowUpWhatsAppHref(
   lead: CustomerLead,
-  storeName: string
+  storeName: string,
+  templateKey?: FollowUpTemplateKey
 ): string {
   const digits = lead.whatsapp.replace(/\D/g, "");
   const phone = digits.length <= 11 && !digits.startsWith("55") ? `55${digits}` : digits;
-  
+
   let msg = `Olá, ${lead.name}! Tudo bem? Aqui é da ${storeName} em Ipaussu.\n`;
-  if (lead.status === "aguardando_reposicao") {
+
+  if (templateKey === "pix") {
+    msg += `Estou retomando seu contato sobre o *${lead.productName}*. Conseguimos liberar uma condição exclusiva de desconto à vista no PIX hoje!\nQuer que eu separe sua unidade?`;
+  } else if (templateKey === "reposicao" || (!templateKey && lead.status === "aguardando_reposicao")) {
     msg += `Passando para avisar que recebemos novidades e reposição do *${lead.productName}* (${lead.variantChosen || "novo lote"}).\nVocê ainda tem interesse em garantir o seu com condição especial?`;
-  } else if (lead.status === "em_negociacao") {
-    msg += `Estou retomando seu contato sobre o *${lead.productName}*. Conseguimos uma condição diferenciada no PIX ou parcelamento hoje!\nPodemos separar para você retirar ou enviar?`;
+  } else if (templateKey === "retirada") {
+    msg += `Passando para avisar que o *${lead.productName}* está disponível para você conferir ou retirar hoje na nossa loja física aqui no centro de Ipaussu!\nQue horas fica bom para você dar uma passada?`;
+  } else if (templateKey === "negociacao" || (!templateKey && lead.status === "em_negociacao")) {
+    msg += `Estou retomando seu contato sobre o *${lead.productName}*. Conseguimos uma condição diferenciada no PIX ou parcelamento no cartão hoje!\nPodemos separar para você?`;
   } else {
-    msg += `Vi que você teve interesse no *${lead.productName}* no nosso app.\nGostaria de tirar alguma dúvida sobre disponibilidade ou condições de pagamento?`;
+    msg += `Vi que você teve interesse no *${lead.productName}* no nosso aplicativo.\nGostaria de tirar alguma dúvida sobre disponibilidade ou condições de pagamento?`;
   }
 
   return `https://wa.me/${phone}?text=${encodeURIComponent(msg)}`;
+}
+
+export function exportLeadsToCsv(leads: CustomerLead[]): string {
+  const headers = ["ID", "Data", "Nome", "WhatsApp", "Produto", "Variante", "Status", "Valor Estimado (R$)", "Anotações"];
+  const rows = leads.map((lead) => [
+    lead.id,
+    new Date(lead.createdAt).toLocaleString("pt-BR"),
+    `"${(lead.name || "").replace(/"/g, '""')}"`,
+    lead.whatsapp,
+    `"${(lead.productName || "").replace(/"/g, '""')}"`,
+    `"${(lead.variantChosen || "").replace(/"/g, '""')}"`,
+    lead.status,
+    lead.estimatedValue ? lead.estimatedValue.toFixed(2) : "",
+    `"${(lead.notes || "").replace(/"/g, '""')}"`,
+  ]);
+
+  return [headers.join(";"), ...rows.map((r) => r.join(";"))].join("\r\n");
 }

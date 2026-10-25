@@ -197,6 +197,7 @@ export default function Home() {
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [pwaInstalled, setPwaInstalled] = useState(false);
   const [showPwaBanner, setShowPwaBanner] = useState(false);
+  const [showIosInstallModal, setShowIosInstallModal] = useState(false);
 
   // Web Push Notifications Subscription State
   const [pushStatus, setPushStatus] = useState<"default" | "granted" | "denied">("default");
@@ -695,6 +696,26 @@ export default function Home() {
     const customCount = customItems.reduce((acc, item) => acc + item.quantity, 0);
     return catCount + customCount;
   }, [selectedCatalogEntries, customItems]);
+
+  const trayTotals = useMemo(() => {
+    let standardTotal = 0;
+    let pixTotal = 0;
+    let hasPrices = false;
+    selectedCatalogEntries.forEach(({ product, quantity }) => {
+      if (product.price) {
+        standardTotal += product.price * quantity;
+        hasPrices = true;
+      }
+      if (product.pricePix) {
+        pixTotal += product.pricePix * quantity;
+        hasPrices = true;
+      } else if (product.price) {
+        pixTotal += Math.round(product.price * 0.92) * quantity;
+      }
+    });
+    const savingsPix = standardTotal > pixTotal ? standardTotal - pixTotal : 0;
+    return { standardTotal, pixTotal, savingsPix, hasPrices };
+  }, [selectedCatalogEntries]);
 
   const generatedOrderMessage = useMemo(() => {
     const greeting = customerName.trim()

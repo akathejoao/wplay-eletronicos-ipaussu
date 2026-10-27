@@ -1,3 +1,4 @@
+import type { IphoneModelSpec } from "./iphone-models";
 import type { SyntheticEvent } from "react";
 
 export type ProductCategory = string;
@@ -90,6 +91,7 @@ export type StoreSettings = {
   custom_gallery: StudioPhoto[];
   hero_slides: HeroSlideConfig[];
   attendance_note: string;
+  custom_phone_models?: IphoneModelSpec[];
   admin_user: string;
   admin_pin: string;
   admin_pin_hash?: string;
@@ -408,6 +410,7 @@ export const defaultStoreSettings: StoreSettings = {
   hero_slides: [...defaultHeroSlides],
   attendance_note:
     "Confirme preço, disponibilidade, formas de pagamento e entrega direto no WhatsApp.",
+  custom_phone_models: [],
   admin_user: "admin",
   admin_pin: "",
   admin_pin_hash: defaultAdminPinHash,

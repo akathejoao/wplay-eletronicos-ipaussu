@@ -80,6 +80,7 @@ import {
 } from "@/lib/catalog-repository";
 import { catalogCacheSeconds, catalogChangedEvent, publicCatalogStorageKey } from "@/lib/catalog-cache";
 import { StoreAtmosphere } from "@/app/components/StoreAtmosphere";
+import { AppDownloadModal } from "@/app/components/AppDownloadModal";
 import { saveCustomerLead } from "@/lib/catalog-crm";
 
 type FulfillmentMode = "Retirar na loja (Ipaussu)" | "Receber por entrega";
@@ -217,9 +218,21 @@ export default function Home() {
   const [selectedIphoneFinishId, setSelectedIphoneFinishId] = useState<string>("desert-titanium");
   const [selectedIphoneCondition, setSelectedIphoneCondition] = useState<"Lacrado" | "Seminovo">("Lacrado");
 
+  const [isAppDownloadModalOpen, setIsAppDownloadModalOpen] = useState(false);
+  const [appModalInitialTab, setAppModalInitialTab] = useState<"android" | "ios" | "desktop">("android");
+
+  const allPhoneModels = useMemo(() => {
+    const custom = settings.custom_phone_models || [];
+    return [...iphoneLineup, ...custom];
+  }, [settings.custom_phone_models]);
+
   const activeIphoneModel: IphoneModelSpec = useMemo(
-    () => getIphoneModelById(selectedIphoneModelId),
-    [selectedIphoneModelId]
+    () =>
+      allPhoneModels.find((m) => m.id === selectedIphoneModelId) ||
+      getIphoneModelById(selectedIphoneModelId) ||
+      allPhoneModels[0] ||
+      iphoneLineup[0],
+    [allPhoneModels, selectedIphoneModelId]
   );
 
   const activeIphoneStorage = useMemo(() => {
@@ -300,8 +313,21 @@ export default function Home() {
   };
 
   const handleRequestPushNotification = async () => {
+    const isIOSDevice =
+      typeof navigator !== "undefined" &&
+      (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
+        (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
+
     if (!("Notification" in window)) {
-      setNotice("Seu navegador não suporta notificações diretas.");
+      if (isIOSDevice) {
+        setAppModalInitialTab("ios");
+        setIsAppDownloadModalOpen(true);
+        setNotice(
+          "No iPhone, adicione à Tela de Início para ativar o App e receber ofertas exclusivas."
+        );
+        return;
+      }
+      setNotice("Seu navegador não suporta notificações diretas. Instale nosso App para receber ofertas.");
       return;
     }
     try {
@@ -983,8 +1009,26 @@ export default function Home() {
             <span>Instale o <strong>App WPlay</strong> no seu celular para receber ofertas exclusivas.</span>
           </div>
           <div className="pwa-banner-actions">
-            <button type="button" className="pwa-btn-install" onClick={() => void handleInstallAppClick()}>
-              Instalar App
+            <button
+              type="button"
+              className="pwa-btn-install"
+              onClick={() => {
+                setAppModalInitialTab("android");
+                setIsAppDownloadModalOpen(true);
+              }}
+            >
+              Baixar APK (Android)
+            </button>
+            <button
+              type="button"
+              className="pwa-btn-install"
+              style={{ background: "rgba(172, 233, 122, 0.15)", color: "#c7f450", border: "1px solid rgba(172, 233, 122, 0.3)" }}
+              onClick={() => {
+                setAppModalInitialTab("ios");
+                setIsAppDownloadModalOpen(true);
+              }}
+            >
+              Instalar no iPhone
             </button>
             <button type="button" className="pwa-btn-dismiss" onClick={() => setShowPwaBanner(false)} aria-label="Fechar">
               <X size={15} />
@@ -1019,17 +1063,6 @@ export default function Home() {
           logoUrl={activeLogoUrl}
           onSecretTrigger={() => router.push("/admin")}
         />
-
-        <button
-          type="button"
-          className="menu-toggle"
-          aria-expanded={menuOpen}
-          aria-controls="primary-navigation"
-          aria-label={menuOpen ? "Fechar menu de navegação" : "Abrir menu de navegação"}
-          onClick={() => setMenuOpen(!menuOpen)}
-        >
-          {menuOpen ? <X size={22} /> : <Menu size={22} />}
-        </button>
 
         <nav id="primary-navigation" className={menuOpen ? "nav nav-open" : "nav"}>
           <a
@@ -1075,6 +1108,17 @@ export default function Home() {
         </nav>
 
         <div className="header-action-group">
+          <button
+            type="button"
+            className="header-app-btn"
+            onClick={() => setIsAppDownloadModalOpen(true)}
+            title="Baixar App WPlay (APK Android ou iPhone)"
+            aria-label="Baixar Aplicativo WPlay"
+          >
+            <Smartphone size={14} />
+            <span className="header-btn-text">Baixar App</span>
+          </button>
+
           {pushStatus !== "granted" && (
             <button
               type="button"
@@ -1084,7 +1128,7 @@ export default function Home() {
               aria-label="Ativar notificações"
             >
               <Bell size={14} />
-              <span>Receber Ofertas</span>
+              <span className="header-btn-text">Receber Ofertas</span>
             </button>
           )}
 
@@ -1376,16 +1420,18 @@ export default function Home() {
                       onClick={() => setInspectedProduct(product)}
                     />
                     <div className="product-quick-Floating">
-                      <button
-                        type="button"
-                        className="icon-pill icon-pill-inspect"
-                        onClick={() => setInspectedProduct(product)}
-                        aria-label={`Espiar ${product.name} em 3D`}
-                        title="Espiar e girar em 3D (360°)"
-                      >
-                        <Eye size={16} />
-                        <span className="pill-3d-label">Espiar 3D</span>
-                      </button>
+                      {isCellular && (
+                        <button
+                          type="button"
+                          className="icon-pill icon-pill-inspect"
+                          onClick={() => setInspectedProduct(product)}
+                          aria-label={`Espiar ${product.name} em 3D`}
+                          title="Espiar e girar em 3D (360°)"
+                        >
+                          <Eye size={16} />
+                          <span className="pill-3d-label">Espiar 3D</span>
+                        </button>
+                      )}
                       <button
                         type="button"
                         className={
@@ -2152,6 +2198,15 @@ export default function Home() {
         </button>
       </div>
 
+      {/* App Download Modal (Android APK + iPhone iOS Guide) */}
+      <AppDownloadModal
+        isOpen={isAppDownloadModalOpen}
+        onClose={() => setIsAppDownloadModalOpen(false)}
+        initialTab={appModalInitialTab}
+        onTriggerPwaInstall={handleInstallAppClick}
+        hasPwaPrompt={Boolean(deferredPrompt)}
+      />
+
       {/* Interactive Product Quick-Look Sheet (with 360° 3D Turntable for all products) */}
       {inspectedProduct && (
         <div
@@ -2318,14 +2373,17 @@ export default function Home() {
               </>
             ) : (
               <>
-                <div className="quicklook-media quicklook-media-3d">
-                  <Product3DStudio
-                    product={inspectedProduct}
-                    variant={
-                      chosenVariants[inspectedProduct.id] ||
-                      inspectedProduct.variants?.[0] ||
-                      getDefaultVariantsForCategory(inspectedProduct.category)[0]
-                    }
+                <div className="quicklook-media" style={{ display: "grid", placeItems: "center", padding: "16px", background: "rgba(0,0,0,0.4)", borderRadius: "14px" }}>
+                  <img
+                    src={inspectedProduct.image}
+                    alt={inspectedProduct.name}
+                    style={{
+                      maxHeight: "320px",
+                      width: "100%",
+                      objectFit: inspectedProduct.imageFit || "contain",
+                      objectPosition: inspectedProduct.imagePosition || "50% 50%",
+                      borderRadius: "10px",
+                    }}
                   />
                 </div>
 

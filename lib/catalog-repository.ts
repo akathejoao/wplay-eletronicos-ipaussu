@@ -1,10 +1,14 @@
 import type { HeroSlideConfig, Product, StoreSettings, StudioPhoto } from "@/lib/catalog";
+import type { IphoneModelSpec } from "@/lib/iphone-models";
 
 export const productColumns =
   "id,name,category,description,badge,price,image,image_fit,image_position,image_scale,published,featured,variants,price_pix,installments,stock_quantity";
 
 export const settingsColumns =
   "id,store_name,logo_url,hero_headline,whatsapp_url,whatsapp_phone,instagram_url,instagram_handle,city,address_line,postal_code,maps_url,hours_lines,custom_categories,custom_gallery,hero_slides,attendance_note";
+
+export const settingsColumnsWithModels =
+  "id,store_name,logo_url,hero_headline,whatsapp_url,whatsapp_phone,instagram_url,instagram_handle,city,address_line,postal_code,maps_url,hours_lines,custom_categories,custom_gallery,hero_slides,attendance_note,custom_phone_models";
 
 export const publicSettingsColumns =
   "id,store_name,logo_url,hero_headline,whatsapp_url,whatsapp_phone,instagram_url,instagram_handle,city,address_line,postal_code,maps_url,hours_lines,custom_categories,hero_slides,attendance_note";
@@ -76,11 +80,12 @@ export function settingsFromDatabase(row: Record<string, unknown>): Partial<Stor
     custom_gallery: row.custom_gallery as StudioPhoto[] | undefined,
     hero_slides: row.hero_slides as HeroSlideConfig[] | undefined,
     attendance_note: row.attendance_note as string | undefined,
+    custom_phone_models: (row.custom_phone_models as IphoneModelSpec[]) || undefined,
   };
 }
 
-export function settingsToDatabase(settings: StoreSettings) {
-  return {
+export function settingsToDatabase(settings: StoreSettings, options?: { includeExtendedSettings?: boolean }) {
+  const row: Record<string, unknown> = {
     id: true,
     store_name: settings.store_name,
     logo_url: settings.logo_url,
@@ -100,4 +105,12 @@ export function settingsToDatabase(settings: StoreSettings) {
     attendance_note: settings.attendance_note,
     updated_at: new Date().toISOString(),
   };
+
+  if (options?.includeExtendedSettings !== false) {
+    if (settings.custom_phone_models !== undefined) {
+      row.custom_phone_models = settings.custom_phone_models;
+    }
+  }
+
+  return row;
 }

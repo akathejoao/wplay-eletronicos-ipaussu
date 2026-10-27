@@ -322,12 +322,7 @@ export default function Home() {
       if (isIOSDevice) {
         setAppModalInitialTab("ios");
         setIsAppDownloadModalOpen(true);
-        setNotice(
-          "No iPhone, adicione à Tela de Início para ativar o App e receber ofertas exclusivas."
-        );
-        return;
       }
-      setNotice("Seu navegador não suporta notificações diretas. Instale nosso App para receber ofertas.");
       return;
     }
     try {
@@ -338,11 +333,9 @@ export default function Home() {
         if (navigator.serviceWorker && navigator.serviceWorker.controller) {
           navigator.serviceWorker.controller.postMessage({ type: "SUBSCRIBED" });
         }
-      } else {
-        setNotice("Notificações não foram autorizadas.");
       }
     } catch {
-      setNotice("Não foi possível ativar as notificações.");
+      // Falha silenciosa sem toast de erro punitivo
     }
   };
 
@@ -1005,33 +998,24 @@ export default function Home() {
       {showPwaBanner && (
         <div className="pwa-install-banner">
           <div className="pwa-banner-content">
-            <Download size={16} />
-            <span>Instale o <strong>App WPlay</strong> no seu celular para receber ofertas exclusivas.</span>
+            <Download size={15} />
+            <span>Instale o <strong>App WPlay</strong> para ofertas exclusivas.</span>
           </div>
           <div className="pwa-banner-actions">
             <button
               type="button"
               className="pwa-btn-install"
-              onClick={() => {
-                setAppModalInitialTab("android");
-                setIsAppDownloadModalOpen(true);
-              }}
+              onClick={() => setIsAppDownloadModalOpen(true)}
             >
-              Baixar APK (Android)
+              Baixar App
             </button>
             <button
               type="button"
-              className="pwa-btn-install"
-              style={{ background: "rgba(172, 233, 122, 0.15)", color: "#c7f450", border: "1px solid rgba(172, 233, 122, 0.3)" }}
-              onClick={() => {
-                setAppModalInitialTab("ios");
-                setIsAppDownloadModalOpen(true);
-              }}
+              className="pwa-btn-dismiss"
+              onClick={() => setShowPwaBanner(false)}
+              aria-label="Fechar aviso"
             >
-              Instalar no iPhone
-            </button>
-            <button type="button" className="pwa-btn-dismiss" onClick={() => setShowPwaBanner(false)} aria-label="Fechar">
-              <X size={15} />
+              <X size={14} />
             </button>
           </div>
         </div>
@@ -1115,36 +1099,8 @@ export default function Home() {
             title="Baixar App WPlay (APK Android ou iPhone)"
             aria-label="Baixar Aplicativo WPlay"
           >
-            <Smartphone size={14} />
-            <span className="header-btn-text">Baixar App</span>
-          </button>
-
-          {pushStatus !== "granted" && (
-            <button
-              type="button"
-              className="header-push-btn"
-              onClick={() => void handleRequestPushNotification()}
-              title="Ativar alertas de novidades e promoções"
-              aria-label="Ativar notificações"
-            >
-              <Bell size={14} />
-              <span className="header-btn-text">Receber Ofertas</span>
-            </button>
-          )}
-
-          <button
-            type="button"
-            className="ambient-toggle"
-            aria-pressed={ambientPaused}
-            aria-label={
-              ambientPaused ? "Ativar iluminação dinâmica" : "Pausar iluminação dinâmica"
-            }
-            title={
-              ambientPaused ? "Ativar iluminação dinâmica" : "Pausar iluminação dinâmica"
-            }
-            onClick={() => setAmbientPaused((previous) => !previous)}
-          >
-            {ambientPaused ? <Play size={14} /> : <Pause size={14} />}
+            <Smartphone size={15} />
+            <span className="header-btn-text">App</span>
           </button>
 
           <button
@@ -1153,14 +1109,14 @@ export default function Home() {
             onClick={handleTopBarBuyClick}
             aria-label={
               totalOrderCount > 0
-                ? `Comprar agora (${totalOrderCount} ${
-                    totalOrderCount === 1 ? "item selecionado" : "itens selecionados"
+                ? `Pedido (${totalOrderCount} ${
+                    totalOrderCount === 1 ? "item" : "itens"
                   })`
-                : "Comprar agora"
+                : "Ver pedido"
             }
           >
             <ShoppingBag size={15} />
-            <span>{totalOrderCount > 0 ? "Comprar agora" : "Comprar"}</span>
+            <span className="header-btn-text">{totalOrderCount > 0 ? "Pedido" : "Comprar"}</span>
             {totalOrderCount > 0 && (
               <span className="header-buy-badge">{totalOrderCount}</span>
             )}
@@ -1168,17 +1124,18 @@ export default function Home() {
 
           <button
             type="button"
-            className="header-quick-whatsapp"
-            onClick={() => void handleSendOrderToWhatsApp()}
-            title="Finalizar pedido em 1 clique pelo WhatsApp"
+            className="menu-toggle"
+            aria-expanded={menuOpen}
+            aria-controls="primary-navigation"
+            aria-label={menuOpen ? "Fechar menu" : "Abrir menu"}
+            onClick={() => setMenuOpen(!menuOpen)}
           >
-            <Zap size={14} />
-            <span>1-Clique</span>
+            {menuOpen ? <X size={20} /> : <Menu size={20} />}
           </button>
         </div>
       </header>
 
-      {/* Interactive Split Stage Hero */}
+      {/* Hero Section */}
       <section className="hero-stage-wrap">
         <div className="hero-left">
           <h1>
@@ -1187,8 +1144,7 @@ export default function Home() {
           </h1>
 
           <p className="hero-summary">
-            iPhones do 13 ao 18 Pro Max, Scooters Elétricas, Perfumes e Áudio em
-            Ipaussu. Preços reais atualizados, estoque a pronta entrega e avaliação imediata na troca.
+            iPhones novos e seminovos, mobilidade e som em Ipaussu com pronta entrega e avaliação imediata na troca.
           </p>
 
           <div className="hero-actions">
@@ -1196,30 +1152,23 @@ export default function Home() {
               type="button"
               className="button button-lime"
               onClick={() => {
-                setCategory(activeSlide.category);
+                setCategory("Tudo");
                 document.getElementById("vitrine")?.scrollIntoView({ behavior: "smooth" });
               }}
             >
-              Explorar {activeSlide.tag} <ArrowRight size={16} />
-            </button>
-            <button
-              type="button"
-              className="button button-outline"
-              onClick={handleTopBarBuyClick}
-            >
-              <ShoppingBag size={16} /> Comprar / Encomendar
+              Explorar Catálogo <ArrowRight size={16} />
             </button>
           </div>
 
-          <div className="hero-trust-strip" aria-label="Vantagens exclusivas WPlay">
+          <div className="hero-trust-strip" aria-label="Vantagens WPlay">
             <span className="trust-pill">
-              <ShieldCheck size={14} /> Retirada hoje em Ipaussu
+              <ShieldCheck size={13} /> Retirada em Ipaussu
             </span>
             <span className="trust-pill">
-              <RefreshCw size={14} /> Seu usado vale na troca
+              <RefreshCw size={13} /> Usado na troca
             </span>
             <span className="trust-pill">
-              <Sparkles size={14} /> Desconto especial no PIX
+              <Sparkles size={13} /> Desconto no PIX
             </span>
           </div>
         </div>
@@ -1282,19 +1231,24 @@ export default function Home() {
                 </button>
               ))}
             </div>
-            <button
-              type="button"
-              className="hud-inspect-btn"
-              onClick={() => {
-                const found =
-                  publishedProducts.find((p) => p.id === activeSlide.id) ||
-                  publishedProducts.find((p) => p.category === activeSlide.category) ||
-                  publishedProducts[0];
-                if (found) setInspectedProduct(found);
-              }}
-            >
-              <Eye size={14} /> Espiar 3D
-            </button>
+            {(() => {
+              const found =
+                publishedProducts.find((p) => p.id === activeSlide.id) ||
+                publishedProducts.find((p) => p.category === activeSlide.category) ||
+                publishedProducts[0];
+              const isPhone = isIphoneOrCellularProduct(found);
+              return (
+                <button
+                  type="button"
+                  className="hud-inspect-btn"
+                  onClick={() => {
+                    if (found) setInspectedProduct(found);
+                  }}
+                >
+                  <Eye size={14} /> {isPhone ? "Espiar 3D" : "Ver Detalhes"}
+                </button>
+              );
+            })()}
           </div>
         </div>
       </section>
@@ -1674,7 +1628,7 @@ export default function Home() {
                           ? `${activeIphoneModel.name} · ${activeIphoneStorage} · ${activeIphoneFinish.name}`
                           : chosenVar}
                         <span>
-                          Configurar 3D <ArrowUpRight size={13} />
+                          {isCellular ? "Configurar 3D" : "Opções"} <ArrowUpRight size={13} />
                         </span>
                       </button>
                     </div>

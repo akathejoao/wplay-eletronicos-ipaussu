@@ -74,7 +74,7 @@
   .storefront-clean .app-install-section { flex-direction: column; align-items: flex-start; }
 }
 @media (max-width: 768px) {
-  .storefront-clean .header { height: auto; min-height: 64px; gap: 8px; padding: 8px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left)); }
+  .storefront-clean .header { height: auto; min-height: calc(64px + env(safe-area-inset-top, 0px)); gap: 8px; padding: max(10px, env(safe-area-inset-top)) max(12px, env(safe-area-inset-right)) 10px max(12px, env(safe-area-inset-left)); }
   .storefront-clean .brand { min-width: 0; }
   .storefront-clean .brand-name { font-size: 12px; white-space: normal; line-height: 1.15; }
   .storefront-clean .header-action-group { flex-shrink: 0; gap: 4px; }

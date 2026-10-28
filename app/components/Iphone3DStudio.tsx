@@ -87,7 +87,7 @@ export function Iphone3DStudio({
   };
 
   const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (reducedMotion || (event.target as HTMLElement).closest("button, input") || event.button !== 0) return;
+    if (event.pointerType === "touch" || reducedMotion || (event.target as HTMLElement).closest("button, input") || event.button !== 0) return;
     dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
     event.currentTarget.setPointerCapture(event.pointerId);
     setAutoSpin(false);

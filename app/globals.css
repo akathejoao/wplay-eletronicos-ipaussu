@@ -59,7 +59,9 @@
 
 html {
   scroll-behavior: smooth;
-  scroll-padding-top: 84px;
+  scroll-padding-top: calc(84px + env(safe-area-inset-top, 0px));
+  overflow-x: clip;
+  -webkit-overflow-scrolling: touch;
 }
 
 body {
@@ -68,7 +70,9 @@ body {
   color: var(--paper);
   font-family: var(--body);
   -webkit-font-smoothing: antialiased;
-  overflow-x: hidden;
+  overflow-x: clip;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
 }
 
 main {
@@ -221,8 +225,8 @@ a {
 
 /* Header with Official WPlay Instagram Logo */
 .header {
-  height: 78px;
-  padding: 0 max(calc((100vw - 1260px) / 2), 5vw);
+  min-height: calc(78px + env(safe-area-inset-top, 0px));
+  padding: max(10px, env(safe-area-inset-top)) max(calc((100vw - 1260px) / 2), 5vw) 10px;
   display: flex;
   align-items: center;
   justify-content: space-between;

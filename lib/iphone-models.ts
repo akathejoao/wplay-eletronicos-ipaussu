@@ -11,7 +11,7 @@ export type IphoneModelSpec = {
   id: string;
   name: string;
   shortName: string;
-  generation: 13 | 14 | 15 | 16 | 17 | 18;
+  generation: number;
   tier: "base" | "plus" | "air" | "pro" | "promax";
   displaySize: string;
   cameraLayout: "diagonal-dual" | "vertical-dual" | "single-bar" | "pro-triple" | "pro-plateau";
@@ -21,6 +21,21 @@ export type IphoneModelSpec = {
   chipset: string;
   highlight: string;
 };
+
+export function isPhoneModelSpec(value: unknown): value is IphoneModelSpec {
+  if (!value || typeof value !== "object") return false;
+  const model = value as Record<string, unknown>;
+  const strings = ["id", "name", "shortName", "displaySize", "chipset", "highlight"];
+  return strings.every((key) => typeof model[key] === "string" && String(model[key]).trim().length > 0) &&
+    typeof model.generation === "number" && Number.isInteger(model.generation) && model.generation > 0 &&
+    ["base", "plus", "air", "pro", "promax"].includes(String(model.tier)) &&
+    ["diagonal-dual", "vertical-dual", "single-bar", "pro-triple", "pro-plateau"].includes(String(model.cameraLayout)) &&
+    ["notch", "island"].includes(String(model.frontFeature)) &&
+    Array.isArray(model.storages) && model.storages.length > 0 && model.storages.every((storage) => typeof storage === "string" && storage.trim()) &&
+    Array.isArray(model.finishes) && model.finishes.length > 0 && model.finishes.every((finish) =>
+      finish && typeof finish === "object" && typeof finish.id === "string" && typeof finish.name === "string" &&
+      ["bodyHex", "frameHex", "accentHex", "screenGlow"].every((key) => typeof finish[key] === "string" && /^#[a-f\d]{6}$/i.test(finish[key])));
+}
 
 export const iphoneLineup: IphoneModelSpec[] = [
   // iPhone 13 Series

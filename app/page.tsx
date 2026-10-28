@@ -8,11 +8,9 @@ import {
   ArrowUpRight,
   AudioLines,
   BatteryCharging,
-  Bell,
   Check,
   Copy,
   CreditCard,
-  Download,
   ExternalLink,
   Eye,
   Layers,
@@ -20,10 +18,8 @@ import {
   Menu,
   Minus,
   Navigation,
-  PackageCheck,
   PackagePlus,
   Pause,
-  Phone,
   Play,
   Plus,
   RefreshCw,
@@ -67,12 +63,10 @@ import {
   formatIphoneSelectionSummary,
   getIphoneModelById,
   IphoneFinish,
-  iphoneGenerations,
   iphoneLineup,
   IphoneModelSpec,
 } from "@/lib/iphone-models";
 import { Iphone3DStudio } from "@/app/components/Iphone3DStudio";
-import { Product3DStudio } from "@/app/components/Product3DStudio";
 import { createClient, isLocalDemoHost } from "@/lib/supabase";
 import {
   productFromDatabase,
@@ -81,6 +75,7 @@ import {
 import { catalogCacheSeconds, catalogChangedEvent, publicCatalogStorageKey } from "@/lib/catalog-cache";
 import { StoreAtmosphere } from "@/app/components/StoreAtmosphere";
 import { AppDownloadModal } from "@/app/components/AppDownloadModal";
+import { type BeforeInstallPromptEvent, type InstallPlatform, isStandaloneApp } from "@/lib/app-install";
 import { saveCustomerLead } from "@/lib/catalog-crm";
 
 type FulfillmentMode = "Retirar na loja (Ipaussu)" | "Receber por entrega";
@@ -188,20 +183,15 @@ export default function Home() {
   const [ambientPaused, setAmbientPaused] = useState(false);
   const [notice, setNotice] = useState("");
   const [catalogLoadError, setCatalogLoadError] = useState("");
+  const [catalogLoading, setCatalogLoading] = useState(true);
   const [safeLinkRecovery, setSafeLinkRecovery] = useState<SafeLinkRecoveryState>(null);
   const cloudCatalogConfigured = Boolean(
     process.env.NEXT_PUBLIC_SUPABASE_URL &&
     (process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY || process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY)
   );
 
-  // PWA Install Prompt State
-  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [deferredPrompt, setDeferredPrompt] = useState<BeforeInstallPromptEvent | null>(null);
   const [pwaInstalled, setPwaInstalled] = useState(false);
-  const [showPwaBanner, setShowPwaBanner] = useState(false);
-  const [showIosInstallModal, setShowIosInstallModal] = useState(false);
-
-  // Web Push Notifications Subscription State
-  const [pushStatus, setPushStatus] = useState<"default" | "granted" | "denied">("default");
 
   // Scroll-Driven Atmosphere Stage
   const [atmosphereStage, setAtmosphereStage] = useState<AtmosphereStage>("hero");
@@ -212,14 +202,13 @@ export default function Home() {
   const stageRef = useRef<HTMLDivElement | null>(null);
 
   // Interactive iPhone 13 -> 18 Pro Max Configurator State
-  const [activeIphoneGen, setActiveIphoneGen] = useState<13 | 14 | 15 | 16 | 17 | 18>(16);
   const [selectedIphoneModelId, setSelectedIphoneModelId] = useState<string>("iphone-16-pro-max");
   const [selectedIphoneStorage, setSelectedIphoneStorage] = useState<string>("256 GB");
   const [selectedIphoneFinishId, setSelectedIphoneFinishId] = useState<string>("desert-titanium");
   const [selectedIphoneCondition, setSelectedIphoneCondition] = useState<"Lacrado" | "Seminovo">("Lacrado");
 
   const [isAppDownloadModalOpen, setIsAppDownloadModalOpen] = useState(false);
-  const [appModalInitialTab, setAppModalInitialTab] = useState<"android" | "ios" | "desktop">("android");
+  const [appModalInitialTab, setAppModalInitialTab] = useState<InstallPlatform | undefined>(undefined);
 
   const allPhoneModels = useMemo(() => {
     const custom = settings.custom_phone_models || [];
@@ -268,74 +257,68 @@ export default function Home() {
   });
   const [inspectedProduct, setInspectedProduct] = useState<Product | null>(null);
 
-  // PWA & Service Worker Registration
   useEffect(() => {
-    if (typeof window !== "undefined" && "serviceWorker" in navigator) {
-      navigator.serviceWorker.register("/sw.js").catch(() => {});
+    if ("serviceWorker" in navigator && window.isSecureContext) {
+      void navigator.serviceWorker.register("/sw.js").catch(() => {
+        // The catalog and the installation instructions remain usable without a worker.
+      });
     }
-
-    if (typeof window !== "undefined" && "Notification" in window) {
-      setPushStatus(Notification.permission);
-    }
-
-    const handleBeforeInstall = (e: Event) => {
-      e.preventDefault();
-      setDeferredPrompt(e);
-      setShowPwaBanner(true);
+    const displayMode = window.matchMedia("(display-mode: standalone)");
+    const syncInstalled = () => setPwaInstalled(isStandaloneApp());
+    syncInstalled();
+    const handleBeforeInstall = (event: Event) => {
+      event.preventDefault();
+      if (!isStandaloneApp()) setDeferredPrompt(event as BeforeInstallPromptEvent);
     };
-
     const handleAppInstalled = () => {
       setPwaInstalled(true);
-      setShowPwaBanner(false);
-      setNotice("App WPlay instalado com sucesso no seu dispositivo!");
+      setDeferredPrompt(null);
+      setNotice("App WPlay instalado. Abra pelo ícone na sua tela inicial.");
     };
-
+    displayMode.addEventListener("change", syncInstalled);
     window.addEventListener("beforeinstallprompt", handleBeforeInstall);
     window.addEventListener("appinstalled", handleAppInstalled);
-
     return () => {
+      displayMode.removeEventListener("change", syncInstalled);
       window.removeEventListener("beforeinstallprompt", handleBeforeInstall);
       window.removeEventListener("appinstalled", handleAppInstalled);
     };
   }, []);
 
-  const handleInstallAppClick = async () => {
-    if (!deferredPrompt) {
-      setNotice("Para instalar: toque em Compartilhar e selecione 'Adicionar à Tela de Início'.");
-      return;
-    }
-    deferredPrompt.prompt();
-    const { outcome } = await deferredPrompt.userChoice;
-    if (outcome === "accepted") {
-      setShowPwaBanner(false);
-    }
-    setDeferredPrompt(null);
+  const openAppDownload = (platform?: InstallPlatform) => {
+    setMenuOpen(false);
+    setAppModalInitialTab(platform);
+    setIsAppDownloadModalOpen(true);
   };
 
-  const handleRequestPushNotification = async () => {
-    const isIOSDevice =
-      typeof navigator !== "undefined" &&
-      (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
-        (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
+  useEffect(() => {
+    if (!menuOpen) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setMenuOpen(false);
+      document.querySelector<HTMLButtonElement>(".menu-toggle")?.focus();
+    };
+    const closeOutsideHeader = (event: PointerEvent) => {
+      if (!(event.target as HTMLElement).closest(".header")) setMenuOpen(false);
+    };
+    document.addEventListener("keydown", closeOnEscape);
+    document.addEventListener("pointerdown", closeOutsideHeader);
+    return () => {
+      document.removeEventListener("keydown", closeOnEscape);
+      document.removeEventListener("pointerdown", closeOutsideHeader);
+    };
+  }, [menuOpen]);
 
-    if (!("Notification" in window)) {
-      if (isIOSDevice) {
-        setAppModalInitialTab("ios");
-        setIsAppDownloadModalOpen(true);
-      }
-      return;
-    }
+  const handleInstallAppClick = async () => {
+    const prompt = deferredPrompt;
+    if (!prompt) return;
+    setDeferredPrompt(null);
     try {
-      const permission = await Notification.requestPermission();
-      setPushStatus(permission);
-      if (permission === "granted") {
-        setNotice("Notificações ativadas! Você receberá ofertas e novidades.");
-        if (navigator.serviceWorker && navigator.serviceWorker.controller) {
-          navigator.serviceWorker.controller.postMessage({ type: "SUBSCRIBED" });
-        }
-      }
+      await prompt.prompt();
+      const { outcome } = await prompt.userChoice;
+      if (outcome === "accepted") setIsAppDownloadModalOpen(false);
     } catch {
-      // Falha silenciosa sem toast de erro punitivo
+      setNotice("A instalação não foi concluída. Use o menu do navegador para adicionar a WPlay à tela inicial.");
     }
   };
 
@@ -365,14 +348,14 @@ export default function Home() {
   }, [router]);
 
   useEffect(() => {
-    if (!inspectedProduct) return;
+    if (!inspectedProduct && !safeLinkRecovery) return;
     const previousFocus = document.activeElement as HTMLElement | null;
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
-    const panel = document.querySelector<HTMLElement>(".quicklook-sheet");
+    const panel = document.querySelector<HTMLElement>(safeLinkRecovery ? ".safelink-modal" : ".quicklook-sheet");
     panel?.querySelector<HTMLElement>("button")?.focus();
     const handleModalKey = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setInspectedProduct(null);
+      if (event.key === "Escape") { if (safeLinkRecovery) setSafeLinkRecovery(null); else setInspectedProduct(null); }
       if (event.key !== "Tab" || !panel) return;
       const controls = [
         ...panel.querySelectorAll<HTMLElement>(
@@ -395,12 +378,10 @@ export default function Home() {
       document.removeEventListener("keydown", handleModalKey);
       previousFocus?.focus();
     };
-  }, [inspectedProduct]);
+  }, [inspectedProduct, safeLinkRecovery]);
 
   // Interactive Order Studio ("Central de Encomendas & Follow-up")
-  const [orderQuantities, setOrderQuantities] = useState<Record<string, number>>({
-    "iphone-pro": 1,
-  });
+  const [orderQuantities, setOrderQuantities] = useState<Record<string, number>>({});
   const [customItems, setCustomItems] = useState<CustomOrderItem[]>([]);
   const [customDraftTitle, setCustomDraftTitle] = useState("");
   const [customDraftCondition, setCustomDraftCondition] =
@@ -437,7 +418,6 @@ export default function Home() {
         : nextModel.finishes.find((f) => f.id === selectedIphoneFinishId) ||
           nextModel.finishes[0];
 
-    setActiveIphoneGen(nextModel.generation);
     setSelectedIphoneModelId(nextModel.id);
     setSelectedIphoneStorage(validStorage);
     setSelectedIphoneFinishId(validFinish.id);
@@ -461,6 +441,7 @@ export default function Home() {
       if (!isLocalDemoHost()) {
         setProducts([]);
         setCatalogLoadError("A vitrine está temporariamente indisponível.");
+        setCatalogLoading(false);
         return;
       }
       const syncFromLocal = () => {
@@ -477,6 +458,7 @@ export default function Home() {
         } catch {
           setCatalogLoadError("Não foi possível carregar os dados locais.");
         }
+        setCatalogLoading(false);
       };
       syncFromLocal();
       window.addEventListener("storage", syncFromLocal);
@@ -499,6 +481,7 @@ export default function Home() {
       setProducts(snapshot.products.map((row, index) => normalizeProduct(productFromDatabase(row), index)));
       setSettings(snapshot.settings ? normalizeSettings(settingsFromDatabase(snapshot.settings)) : defaultStoreSettings);
       setCatalogLoadError("");
+      setCatalogLoading(false);
     };
 
     const readSavedCatalog = () => {
@@ -545,6 +528,7 @@ export default function Home() {
         }
       } finally {
         loading = false;
+        if (!cancelled) setCatalogLoading(false);
       }
     };
 
@@ -716,33 +700,13 @@ export default function Home() {
     return catCount + customCount;
   }, [selectedCatalogEntries, customItems]);
 
-  const trayTotals = useMemo(() => {
-    let standardTotal = 0;
-    let pixTotal = 0;
-    let hasPrices = false;
-    selectedCatalogEntries.forEach(({ product, quantity }) => {
-      if (product.price) {
-        standardTotal += product.price * quantity;
-        hasPrices = true;
-      }
-      if (product.pricePix) {
-        pixTotal += product.pricePix * quantity;
-        hasPrices = true;
-      } else if (product.price) {
-        pixTotal += Math.round(product.price * 0.92) * quantity;
-      }
-    });
-    const savingsPix = standardTotal > pixTotal ? standardTotal - pixTotal : 0;
-    return { standardTotal, pixTotal, savingsPix, hasPrices };
-  }, [selectedCatalogEntries]);
-
   const generatedOrderMessage = useMemo(() => {
     const greeting = customerName.trim()
       ? `Olá, WPlay! Aqui é ${customerName.trim()}.`
       : "Olá, WPlay! Montei minha encomenda pelo app/vitrine:";
 
     const catalogLines = selectedCatalogEntries.map(({ product, quantity, variant }) => {
-      const price = formatCurrencyBRL(product.pricePix || product.price);
+      const price = formatCurrencyBRL(product.pricePix ?? product.price);
       const details = [variant, price].filter(Boolean).join(" · ");
       const qtyPrefix = quantity > 1 ? `${quantity}x ` : "";
       return `• ${qtyPrefix}${product.name}${details ? ` (${details})` : ""}`;
@@ -879,10 +843,13 @@ export default function Home() {
     copyPayload?: string
   ) => {
     const { url, repaired } = sanitizeExternalUrl(rawUrl, fallbackUrl);
-    if (copyPayload) {
-      await handleCopyMessage(copyPayload);
+    // Open during the click's user activation, before asynchronous clipboard work.
+    const opened = window.open("about:blank", "_blank");
+    if (opened) {
+      opened.opener = null;
+      opened.location.replace(url);
     }
-    const opened = window.open(url, "_blank", "noopener,noreferrer");
+    if (copyPayload) await handleCopyMessage(copyPayload);
     if (!opened || repaired) {
       setSafeLinkRecovery({
         label,
@@ -896,16 +863,17 @@ export default function Home() {
   // Automatically captures lead into CRM when customer initiates checkout
   const recordCustomerLead = async (productHint?: Product, variantHint?: string) => {
     try {
+      if (customerWhatsApp.replace(/\D/g, "").length < 10) return;
       const topEntry = selectedCatalogEntries[0];
       const prodName = productHint?.name || topEntry?.product.name || "Pedido pelo App WPlay";
       const pId = productHint?.id || topEntry?.product.id;
       const variant = variantHint || topEntry?.variant;
-      const estVal = productHint?.pricePix || productHint?.price || topEntry?.product.pricePix || topEntry?.product.price || null;
+      const estVal = productHint?.pricePix ?? productHint?.price ?? topEntry?.product.pricePix ?? topEntry?.product.price ?? null;
 
       await saveCustomerLead(
         {
           name: customerName.trim() || "Cliente Interessado",
-          whatsapp: customerWhatsApp.trim() || settings.whatsapp_phone || "Não informado",
+          whatsapp: customerWhatsApp.trim(),
           productName: prodName,
           productId: pId,
           variantChosen: variant,
@@ -923,20 +891,14 @@ export default function Home() {
   const handleSendOrderToWhatsApp = async () => {
     void recordCustomerLead();
     const { href, usesDirectText } = buildWhatsAppHref(settings, activeOrderMessage);
-    const copied = await handleCopyMessage(activeOrderMessage);
-    if (!usesDirectText) {
-      setNotice(
-        copied
-          ? "Encomenda copiada! Cole na conversa do WhatsApp que abrimos."
-          : "Abrindo o WhatsApp oficial da WPlay."
-      );
-    }
-    await openSafeExternalLink(
+    const opening = openSafeExternalLink(
       href,
       defaultStoreSettings.whatsapp_url,
       "WhatsApp Oficial WPlay",
       activeOrderMessage
     );
+    await opening;
+    if (!usesDirectText) setNotice("Cole o texto do pedido na conversa do WhatsApp.");
   };
 
   const handleQuickProductConsult = async (product: Product) => {
@@ -945,7 +907,7 @@ export default function Home() {
       : chosenVariants[product.id] ||
         (product.variants && product.variants[0]) ||
         getDefaultVariantsForCategory(product.category)[0];
-    const priceLabel = formatCurrencyBRL(product.pricePix || product.price);
+    const priceLabel = formatCurrencyBRL(product.pricePix ?? product.price);
     const meta = [variant, priceLabel].filter(Boolean).join(" · ");
     const quickText = `Olá, WPlay! Quero comprar/consultar: ${product.name}${
       meta ? ` (${meta})` : ""
@@ -953,13 +915,7 @@ export default function Home() {
     
     void recordCustomerLead(product, variant);
 
-    const { href, usesDirectText } = buildWhatsAppHref(settings, quickText);
-    if (!usesDirectText) {
-      const copied = await handleCopyMessage(quickText);
-      if (copied) {
-        setNotice(`"${meta || product.name}" copiado! Cole no WhatsApp.`);
-      }
-    }
+    const { href } = buildWhatsAppHref(settings, quickText);
     await openSafeExternalLink(
       href,
       defaultStoreSettings.whatsapp_url,
@@ -970,11 +926,6 @@ export default function Home() {
 
   const handleTopBarBuyClick = () => {
     setMenuOpen(false);
-    if (totalOrderCount === 0 && activeSlide) {
-      const targetId = activeSlide.id || "iphone-pro";
-      setOrderQuantities({ [targetId]: 1 });
-      setNotice(`Adicionamos ${activeSlide.title} ao seu pedido para agilizar!`);
-    }
     document.getElementById("encomenda")?.scrollIntoView({ behavior: "smooth" });
   };
 
@@ -992,34 +943,7 @@ export default function Home() {
 
   return (
     <main className="storefront-clean" id="inicio">
-      <StoreAtmosphere paused={ambientPaused} />
-
-      {/* PWA Install Notification Bar */}
-      {showPwaBanner && (
-        <div className="pwa-install-banner">
-          <div className="pwa-banner-content">
-            <Download size={15} />
-            <span>Instale o <strong>App WPlay</strong> para ofertas exclusivas.</span>
-          </div>
-          <div className="pwa-banner-actions">
-            <button
-              type="button"
-              className="pwa-btn-install"
-              onClick={() => setIsAppDownloadModalOpen(true)}
-            >
-              Baixar App
-            </button>
-            <button
-              type="button"
-              className="pwa-btn-dismiss"
-              onClick={() => setShowPwaBanner(false)}
-              aria-label="Fechar aviso"
-            >
-              <X size={14} />
-            </button>
-          </div>
-        </div>
-      )}
+      <StoreAtmosphere paused={ambientPaused || isAppDownloadModalOpen || Boolean(inspectedProduct) || Boolean(safeLinkRecovery)} />
 
       {catalogLoadError && (
         <div className="catalog-status-bar" role="alert">
@@ -1048,7 +972,7 @@ export default function Home() {
           onSecretTrigger={() => router.push("/admin")}
         />
 
-        <nav id="primary-navigation" className={menuOpen ? "nav nav-open" : "nav"}>
+        <nav id="primary-navigation" aria-label="Navegação principal" className={menuOpen ? "nav nav-open" : "nav"}>
           <a
             href="#vitrine"
             className={atmosphereStage === "vitrine" ? "nav-active" : undefined}
@@ -1095,12 +1019,13 @@ export default function Home() {
           <button
             type="button"
             className="header-app-btn"
-            onClick={() => setIsAppDownloadModalOpen(true)}
+            onClick={() => openAppDownload()}
             title="Baixar App WPlay (APK Android ou iPhone)"
             aria-label="Baixar Aplicativo WPlay"
           >
             <Smartphone size={15} />
-            <span className="header-btn-text">App</span>
+            <span className="header-btn-text header-app-label-wide">{pwaInstalled ? "App instalado" : "Baixar app"}</span>
+            <span className="header-app-label-short">App</span>
           </button>
 
           <button
@@ -1160,7 +1085,7 @@ export default function Home() {
             </button>
           </div>
 
-          <div className="hero-trust-strip" aria-label="Vantagens WPlay">
+          <div className="hero-trust-strip" role="group" tabIndex={0} aria-label="Vantagens WPlay">
             <span className="trust-pill">
               <ShieldCheck size={13} /> Retirada em Ipaussu
             </span>
@@ -1489,9 +1414,10 @@ export default function Home() {
             })}
           </div>
         ) : (
-          <div className="empty-results">
+          <div className="empty-results" role="status" aria-live="polite">
             <Search size={22} />
-            <p>Nada encontrado para esse filtro.</p>
+            <p>{catalogLoading ? "Carregando o catálogo…" : catalogLoadError ? "Não foi possível carregar os produtos. Fale com a loja pelo WhatsApp." : products.length === 0 ? "Nenhum produto publicado no momento. Consulte a loja pelo WhatsApp." : "Nada encontrado para esse filtro."}</p>
+            {!catalogLoading && products.length > 0 && (
             <button
               type="button"
               onClick={() => {
@@ -1502,6 +1428,7 @@ export default function Home() {
             >
               Mostrar tudo
             </button>
+            )}
           </div>
         )}
       </section>
@@ -2071,6 +1998,14 @@ export default function Home() {
         </div>
       </section>
 
+      <section className="app-install-section" id="aplicativo" aria-labelledby="app-section-title">
+        <div><h2 id="app-section-title">A WPlay na sua tela inicial.</h2><p>Escolha seu celular e veja como acessar o catálogo pelo app.</p></div>
+        <div className="app-install-options">
+          <button type="button" onClick={() => openAppDownload("android")}><Smartphone size={18} /> App para Android</button>
+          <button type="button" onClick={() => openAppDownload("ios")}><Plus size={18} /> Instalar no iPhone</button>
+        </div>
+      </section>
+
       {/* Footer with Official WPlay Logo */}
       <footer className="footer">
         <div className="footer-brand-block">
@@ -2083,6 +2018,10 @@ export default function Home() {
         </div>
 
         <div className="footer-links">
+          <button type="button" className="footer-motion-toggle" aria-pressed={ambientPaused} onClick={() => setAmbientPaused((paused) => !paused)}>
+            {ambientPaused ? <Play size={14} /> : <Pause size={14} />}
+            {ambientPaused ? "Retomar animações" : "Pausar animações"}
+          </button>
           <a
             href={mapsHref}
             target="_blank"
@@ -2159,6 +2098,7 @@ export default function Home() {
         initialTab={appModalInitialTab}
         onTriggerPwaInstall={handleInstallAppClick}
         hasPwaPrompt={Boolean(deferredPrompt)}
+        installed={pwaInstalled}
       />
 
       {/* Interactive Product Quick-Look Sheet (with 360° 3D Turntable for all products) */}
@@ -2211,12 +2151,11 @@ export default function Home() {
                         value={activeIphoneModel.id}
                         onChange={(event) => {
                           const nextModel = getIphoneModelById(event.target.value);
-                          setActiveIphoneGen(nextModel.generation);
-                          applyIphoneConfiguration(nextModel, undefined, undefined, selectedIphoneCondition);
+                                                applyIphoneConfiguration(nextModel, undefined, undefined, selectedIphoneCondition);
                         }}
                       >
-                        {iphoneGenerations.map((generation) => (
-                          <optgroup key={generation} label={`Linha iPhone ${generation}`}>
+                        {Array.from(new Set(allPhoneModels.map((model) => model.generation))).sort((a, b) => a - b).map((generation) => (
+                          <optgroup key={generation} label={`Geração ${generation}`}>
                             {iphoneLineup
                               .filter((model) => model.generation === generation)
                               .map((model) => (

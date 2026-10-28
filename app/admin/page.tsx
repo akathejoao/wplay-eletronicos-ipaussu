@@ -28,7 +28,6 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
-  Send,
   ShieldAlert,
   ShieldCheck,
   Sliders,
@@ -47,7 +46,6 @@ import {
   adminSessionStorageKey,
   compressImageFile,
   CustomerLead,
-  PushNotificationCampaign,
   defaultAdminPinHash,
   defaultProductCategories,
   defaultStoreSettings,
@@ -72,18 +70,20 @@ import {
   verifyAdminCredentials,
 } from "@/lib/catalog";
 import { createClient, isLocalDemoHost } from "@/lib/supabase";
+import { requireStoreAdmin } from "@/lib/admin-access";
 import { notifyCatalogChanged } from "@/lib/catalog-cache";
 import { uploadCatalogImage } from "@/lib/catalog-media";
 import {
+  basicProductColumns,
+  isMissingColumnError,
   productColumns,
   productFromDatabase,
   productToDatabase,
-  settingsColumns,
   settingsFromDatabase,
   settingsToDatabase,
 } from "@/lib/catalog-repository";
 import { AdminAccessManager } from "@/app/components/AdminAccessManager";
-import { buildFollowUpWhatsAppHref, deleteCustomerLead, exportLeadsToCsv, FollowUpTemplateKey, getStoredLeads, loadLeads, updateLeadStatus } from "@/lib/catalog-crm";
+import { buildFollowUpWhatsAppHref, loadLeads, updateLeadStatus } from "@/lib/catalog-crm";
 
 type AdminTab = "fotos" | "produtos" | "categorias" | "modelos" | "crm" | "push" | "seguranca" | "config";
 type PhotoFramingDraft = {
@@ -181,17 +181,15 @@ export default function AdminPage() {
 
   // CRM Leads & Follow-up state ("crm" tab)
   const [leads, setLeads] = useState<CustomerLead[]>([]);
+  const [leadsLoadError, setLeadsLoadError] = useState("");
   const [crmFilter, setCrmFilter] = useState<string>("todos");
   const [crmSearch, setCrmSearch] = useState<string>("");
   const [editingLeadNoteId, setEditingLeadNoteId] = useState<string | null>(null);
   const [leadNoteDraft, setLeadNoteDraft] = useState<string>("");
-  const [leadTemplateChoices, setLeadTemplateChoices] = useState<Record<string, FollowUpTemplateKey>>({});
 
   // Push Notifications state ("push" tab)
-  const [pushCampaigns, setPushCampaigns] = useState<PushNotificationCampaign[]>([]);
   const [pushTitleDraft, setPushTitleDraft] = useState<string>("🚀 Novidades Exclusivas na WPlay!");
   const [pushBodyDraft, setPushBodyDraft] = useState<string>("Novos aparelhos lacrados a pronta entrega com descontos especiais no PIX. Confira!");
-  const [pushUrlDraft, setPushUrlDraft] = useState<string>("/");
   const [isSendingPush, setIsSendingPush] = useState<boolean>(false);
 
   // Settings state ("config" tab)
@@ -203,43 +201,23 @@ export default function AdminPage() {
   const supabase = useMemo(() => createClient(), []);
   const localDemoMode = !supabase && isLocalDemoHost();
 
-  useEffect(() => {
-    if (isAuthenticated) {
-      void loadLeads(supabase).then((loaded) => setLeads(loaded));
-      try {
-        const stored = localStorage.getItem("wplay-push-campaigns-v1");
-        if (stored) {
-          setPushCampaigns(JSON.parse(stored));
-        } else {
-          const initialPush: PushNotificationCampaign[] = [
-            {
-              id: "push-1",
-              createdAt: new Date(Date.now() - 3600000 * 24 * 2).toISOString(),
-              title: "🔥 Lote Novo: iPhone 16 Pro Max",
-              body: "Chegaram unidades lacradas na cor Titânio-deserto. Pronta entrega e PIX com desconto!",
-              targetUrl: "/",
-              sentCount: 42,
-            },
-            {
-              id: "push-2",
-              createdAt: new Date(Date.now() - 3600000 * 5).toISOString(),
-              title: "⚡ Scooter Elétrica Fat Urbana",
-              body: "Disponível para test-drive na loja de Ipaussu. Parcelamento em até 18x!",
-              targetUrl: "/",
-              sentCount: 42,
-            },
-          ];
-          setPushCampaigns(initialPush);
-          localStorage.setItem("wplay-push-campaigns-v1", JSON.stringify(initialPush));
-        }
-      } catch {}
+  const refreshLeads = useCallback(async () => {
+    try {
+      setLeads(await loadLeads(supabase));
+      setLeadsLoadError("");
+    } catch (caught) {
+      setLeads([]);
+      setLeadsLoadError(caught instanceof Error ? caught.message : "Não foi possível carregar os contatos.");
     }
-    const handleUpdate = () => {
-      setLeads(getStoredLeads());
-    };
+  }, [supabase]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    void refreshLeads();
+    const handleUpdate = () => { void refreshLeads(); };
     window.addEventListener("wplay-leads-updated", handleUpdate);
     return () => window.removeEventListener("wplay-leads-updated", handleUpdate);
-  }, [isAuthenticated, supabase]);
+  }, [isAuthenticated, refreshLeads]);
 
   const crmMetrics = useMemo(() => {
     const total = leads.length;
@@ -274,137 +252,54 @@ export default function AdminPage() {
   ) => {
     const ok = await updateLeadStatus(id, newStatus, notes, supabase);
     if (ok) {
-      setLeads(getStoredLeads());
+      await refreshLeads();
       showToast("Status do cliente atualizado!");
+    } else {
+      showToast("Não foi possível atualizar o contato. Verifique sua conexão e permissão.");
     }
   };
 
-
-  const handleQuickStockAdjust = async (productId: string, delta: number) => {
-    const target = products.find((p) => p.id === productId);
-    if (!target) return;
-    const currentQty = target.stockQuantity ?? 5;
-    const nextQty = Math.max(0, currentQty + delta);
-    const updated = products.map((p) =>
-      p.id === productId ? { ...p, stockQuantity: nextQty } : p
-    );
-    const ok = await persistProducts(updated);
-    if (ok) {
-      showToast(`${target.name}: estoque ajustado para ${nextQty} un.`);
-    }
-  };
-
-  const handleExportLeadsCsv = () => {
-    if (leads.length === 0) {
-      showToast("Nenhum lead registrado para exportar.");
-      return;
-    }
-    const csvContent = exportLeadsToCsv(leads);
-    const blob = new Blob(["\uFEFF" + csvContent], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.setAttribute("download", `leads-wplay-${new Date().toISOString().slice(0, 10)}.csv`);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-    showToast("Planilha de contatos exportada!");
-  };
-
-  const handleDeleteLead = async (id: string) => {
-    if (!window.confirm("Remover este contato do CRM?")) return;
-    const ok = await deleteCustomerLead(id, supabase);
-    if (ok) {
-      setLeads(getStoredLeads());
-      showToast("Contato removido do CRM.");
-    }
-  };
 
   const handleSaveLeadNote = async (id: string) => {
     const target = leads.find((l) => l.id === id);
     if (!target) return;
-    await updateLeadStatus(id, target.status, leadNoteDraft, supabase);
-    setLeads(getStoredLeads());
+    const saved = await updateLeadStatus(id, target.status, leadNoteDraft, supabase);
+    if (!saved) { showToast("A anotação não foi salva. Tente novamente."); return; }
+    await refreshLeads();
     setEditingLeadNoteId(null);
     showToast("Anotação do cliente salva!");
   };
 
-  const handleSendPushBroadcast = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!pushTitleDraft.trim() || !pushBodyDraft.trim()) {
-      showToast("Informe o título e mensagem da notificação.");
+  const handleTestLocalPush = async () => {
+    if (!("Notification" in window)) {
+      showToast("Notificações não são suportadas neste navegador. No iPhone, abra o app instalado na Tela de Início.");
       return;
     }
     setIsSendingPush(true);
     try {
-      if (typeof window !== "undefined" && "Notification" in window && Notification.permission === "granted") {
-        try {
-          if ("serviceWorker" in navigator) {
-            const reg = await navigator.serviceWorker.ready;
-            reg.showNotification(pushTitleDraft, {
-              body: pushBodyDraft,
-              icon: officialLogoPath,
-              badge: officialLogoPath,
-              data: { url: pushUrlDraft || "/" },
-            });
-          } else {
-            new Notification(pushTitleDraft, {
-              body: pushBodyDraft,
-              icon: officialLogoPath,
-            });
-          }
-        } catch {}
+      const permission = Notification.permission === "default" ? await Notification.requestPermission() : Notification.permission;
+      if (permission !== "granted") {
+        showToast("Permissão de notificações não concedida no navegador.");
+        return;
       }
-      const newCamp: PushNotificationCampaign = {
-        id: "push-" + Date.now(),
-        createdAt: new Date().toISOString(),
-        title: pushTitleDraft.trim(),
-        body: pushBodyDraft.trim(),
-        targetUrl: pushUrlDraft.trim() || "/",
-        sentCount: 42,
-      };
-      const updated = [newCamp, ...pushCampaigns].slice(0, 30);
-      setPushCampaigns(updated);
-      try {
-        localStorage.setItem("wplay-push-campaigns-v1", JSON.stringify(updated));
-      } catch {}
-      showToast("Disparo de push enviado com sucesso!");
+      if ("serviceWorker" in navigator) {
+        await navigator.serviceWorker.register("/sw.js");
+        let timeout: ReturnType<typeof setTimeout> | undefined;
+        try {
+          const ready = await Promise.race([
+            navigator.serviceWorker.ready,
+            new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error("Tempo de espera excedido.")), 8_000); }),
+          ]);
+          await ready.showNotification(pushTitleDraft || "WPlay Eletrônicos", { body: pushBodyDraft, icon: officialLogoPath, data: { url: "/" } });
+        } finally { clearTimeout(timeout); }
+      } else {
+        new Notification(pushTitleDraft || "WPlay Eletrônicos", { body: pushBodyDraft, icon: officialLogoPath });
+      }
+      showToast("Notificação de teste exibida neste dispositivo.");
+    } catch {
+      showToast("Não foi possível exibir o teste. Verifique as permissões do navegador.");
     } finally {
       setIsSendingPush(false);
-    }
-  };
-
-  const handleTestLocalPush = async () => {
-    if (typeof window === "undefined" || !("Notification" in window)) {
-      showToast("Notificações não são suportadas neste navegador.");
-      return;
-    }
-    let perm = Notification.permission;
-    if (perm === "default") {
-      perm = await Notification.requestPermission();
-    }
-    if (perm !== "granted") {
-      showToast("Permissão de notificações não concedida no navegador.");
-      return;
-    }
-    try {
-      if ("serviceWorker" in navigator) {
-        const reg = await navigator.serviceWorker.ready;
-        reg.showNotification(pushTitleDraft || "WPlay Eletrônicos", {
-          body: pushBodyDraft || "Ofertas exclusivas e estoque atualizado!",
-          icon: officialLogoPath,
-          badge: officialLogoPath,
-        });
-      } else {
-        new Notification(pushTitleDraft || "WPlay Eletrônicos", {
-          body: pushBodyDraft || "Ofertas exclusivas e estoque atualizado!",
-          icon: officialLogoPath,
-        });
-      }
-      showToast("Notificação de teste exibida na sua tela!");
-    } catch {
-      showToast("Erro ao acionar notificação.");
     }
   };
 
@@ -435,9 +330,17 @@ export default function AdminPage() {
           .maybeSingle(),
       ]);
 
+      let productRows: Record<string, unknown>[] = productsResult.data || [];
+      let productError = productsResult.error;
+      if (isMissingColumnError(productError)) {
+        const fallback = await supabase.from("products").select(basicProductColumns).order("created_at", { ascending: false });
+        productRows = fallback.data || [];
+        productError = fallback.error;
+      }
+
       const errors: string[] = [];
-      if (productsResult.error) {
-        errors.push(`Produtos: ${productsResult.error.message}`);
+      if (productError) {
+        errors.push(`Produtos: ${productError.message}`);
       }
       if (settingsResult.error) {
         errors.push(`Configurações: ${settingsResult.error.message}`);
@@ -448,7 +351,7 @@ export default function AdminPage() {
         return { success: false, error: message };
       }
 
-      const loadedProducts = (productsResult.data || []).map((row, index) =>
+      const loadedProducts = productRows.map((row, index) =>
         normalizeProduct(
           productFromDatabase(row as unknown as Record<string, unknown>),
           index
@@ -522,75 +425,27 @@ export default function AdminPage() {
     async (user: { id: string; email?: string | null }) => {
       if (!supabase) return false;
       try {
-      // 1. Tentar validar via claim_store_admin RPC
-      const { error: claimError } = await supabase.rpc("claim_store_admin");
-      if (claimError) {
-        console.warn("claim_store_admin avisou:", claimError.message);
-      }
+        // Claim only an existing invitation, then verify this user's owner row.
+        await supabase.rpc("claim_store_admin");
+        await requireStoreAdmin(supabase);
 
-      // 2. Verificar se o RPC is_store_admin confirma o acesso
-      let isAuthorized = false;
-      try {
-        const { data: rpcAdmin } = await supabase.rpc("is_store_admin");
-        if (rpcAdmin === true) isAuthorized = true;
-      } catch {
-        // RPC pode não ter sido criada ainda no banco
-      }
-
-      // 3. Verificar na tabela store_owners com fallback tolerante a permissão
-      if (!isAuthorized) {
-        const { data: owner, error: ownerError } = await supabase
-          .from("store_owners")
-          .select("user_id")
-          .eq("user_id", user.id)
-          .maybeSingle();
-
-        const userEmail = (user.email || "").toLowerCase().trim();
-        const isOfficialOwnerEmail = userEmail === "joaopro9678@gmail.com";
-
-        if (owner) {
-          isAuthorized = true;
-        } else if (isOfficialOwnerEmail) {
-          // O usuário joaopro9678@gmail.com é o dono oficial cadastrado
-          isAuthorized = true;
-        } else if (ownerError) {
-          // Se for erro de permissão (permission denied for table store_owners), testamos se o usuário consegue acessar os dados
-          const testLoad = await loadCloudData();
-          if (testLoad.success) {
-            isAuthorized = true;
-          } else {
-            await supabase.auth.signOut();
-            setIsAuthenticated(false);
-            setLoginError(
-              `Não foi possível verificar o acesso de administrador: ${ownerError.message}. Para solucionar, execute o script 'supabase/fix-store-owners-access.sql' no Supabase SQL Editor.`
-            );
-            return false;
-          }
-        } else {
+        const loadResult = await loadCloudData();
+        if (!loadResult.success) {
           await supabase.auth.signOut();
           setIsAuthenticated(false);
-          setLoginError("Este e-mail não tem acesso de administrador à loja. Peça um convite ao administrador principal.");
+          setLoginError(`Acesso validado, mas os dados da loja não carregaram. ${loadResult.error}`);
           return false;
         }
-      }
 
-      const loadResult = await loadCloudData();
-      if (!loadResult.success) {
-        await supabase.auth.signOut();
-        setIsAuthenticated(false);
-        setLoginError(`Acesso validado, mas os dados da loja não carregaram. ${loadResult.error}`);
-        return false;
-      }
-
-      const label = user.email || "Administrador";
-      const expiresAt = Date.now() + SESSION_TTL_MS;
-      setAuthUserLabel(label);
-      setSessionExpiresAt(expiresAt);
-      setRemainingSessionMs(SESSION_TTL_MS);
-      setIsAuthenticated(true);
-      setLoginPass("");
-      appendAuditEntry("login_success", label, "Autenticação segura e administrador verificado");
-      return true;
+        const label = user.email || "Administrador";
+        const expiresAt = Date.now() + SESSION_TTL_MS;
+        setAuthUserLabel(label);
+        setSessionExpiresAt(expiresAt);
+        setRemainingSessionMs(SESSION_TTL_MS);
+        setIsAuthenticated(true);
+        setLoginPass("");
+        appendAuditEntry("login_success", label, "Autenticação segura e administrador verificado");
+        return true;
       } catch (caught) {
         await supabase.auth.signOut();
         setIsAuthenticated(false);
@@ -614,6 +469,7 @@ export default function AdminPage() {
       appendAuditEntry("logout", authUserLabel, reason);
       setIsAuthenticated(false);
       setSessionExpiresAt(null);
+      setLeads([]);
       setLoginPass("");
     },
     [appendAuditEntry, authUserLabel, supabase]
@@ -744,20 +600,15 @@ export default function AdminPage() {
           setLoginError("Sua sessão expirou. Entre novamente.");
           return;
         }
-        const userEmail = (authData.user.email || "").toLowerCase().trim();
-        if (userEmail !== "joaopro9678@gmail.com") {
-          const { data: owner, error: ownerError } = await supabase
-            .from("store_owners")
-            .select("user_id")
-            .eq("user_id", authData.user.id)
-            .maybeSingle();
-          if ((ownerError || !owner) && !ownerError?.message?.includes("store_owners")) {
-            await supabase.auth.signOut();
-            setIsAuthenticated(false);
-            setCloudDataLoaded(false);
-            setLoginError("O acesso de administrador foi removido ou não pôde ser verificado.");
-            return;
-          }
+        try {
+          await requireStoreAdmin(supabase);
+        } catch {
+          await supabase.auth.signOut();
+          setIsAuthenticated(false);
+          setCloudDataLoaded(false);
+          setLeads([]);
+          setLoginError("O acesso de administrador foi removido ou não pôde ser verificado.");
+          return;
         }
         const loadResult = await loadCloudData(true);
         if (!loadResult.success) {
@@ -935,38 +786,8 @@ export default function AdminPage() {
       return false;
     }
     try {
-    const { data: authData, error: authError } = await supabase.auth.getUser();
-    if (authError || !authData.user) {
-      showToast("Sessão indisponível. Entre novamente para salvar.");
-      return false;
-    }
-    const userEmail = (authData.user.email || "").toLowerCase().trim();
-    if (userEmail === "joaopro9678@gmail.com") {
+      await requireStoreAdmin(supabase);
       return true;
-    }
-    try {
-      const { data: rpcAdmin } = await supabase.rpc("is_store_admin");
-      if (rpcAdmin === true) return true;
-    } catch {
-      // ignore
-    }
-    const { data: owner, error: ownerError } = await supabase
-      .from("store_owners")
-      .select("user_id")
-      .eq("user_id", authData.user.id)
-      .maybeSingle();
-    if (ownerError || !owner) {
-      if (ownerError && ownerError.message?.includes("store_owners")) {
-        return true;
-      }
-      showToast(
-        ownerError
-          ? `Falha ao verificar permissão: ${ownerError.message}`
-          : "Sua conta não tem permissão para editar esta loja."
-      );
-      return false;
-    }
-    return true;
     } catch (caught) {
       showToast(
         caught instanceof Error
@@ -1011,19 +832,15 @@ export default function AdminPage() {
       }
       if (!(await ensureCloudOwner())) return false;
       try {
-        let result = deletedId
+        const result = deletedId
           ? await supabase.from("products").delete().eq("id", deletedId).select("id")
-          : await supabase.from("products").upsert(changedProducts.map((p) => productToDatabase(p)));
-        if (!deletedId && result.error && result.error.message?.toLowerCase().includes("column")) {
-          result = await supabase.from("products").upsert(changedProducts.map((p) => productToDatabase(p, { includeExtendedColumns: false })));
-        }
+          : await supabase.from("products").upsert(changedProducts.map((p) => productToDatabase(p))).select("id");
         if (result.error) {
           showToast(`Falha ao salvar produtos online: ${result.error.message}`);
           return false;
         }
-        const wroteRows = deletedId
-          ? (result.data?.length ?? 0) > 0
-          : changedProducts.length > 0;
+        const wroteRows = (result.data?.length ?? 0) > 0;
+        if (!wroteRows) { showToast("Nenhum produto foi alterado. Atualize o painel e verifique sua permissão."); return false; }
         productsRef.current = next;
         setProducts(next);
         if (wroteRows) await notifyCatalogCacheBestEffort(supabase);
@@ -1081,14 +898,9 @@ export default function AdminPage() {
       }
       if (!(await ensureCloudOwner())) return false;
       try {
-        let { error } = await supabase
+        const { error } = await supabase
           .from("store_settings")
           .upsert({ id: true, ...changedColumns });
-        if (error && error.message?.toLowerCase().includes("custom_phone_models")) {
-          const { custom_phone_models, ...fallbackColumns } = changedColumns;
-          const retry = await supabase.from("store_settings").upsert({ id: true, ...fallbackColumns });
-          error = retry.error;
-        }
         if (error) {
           showToast(`Falha ao salvar configurações online: ${error.message}`);
           return false;
@@ -1627,7 +1439,7 @@ export default function AdminPage() {
       category: finalCat,
       pricePix: editingProduct.pricePix !== undefined ? editingProduct.pricePix : null,
       installments: editingProduct.installments || undefined,
-      stockQuantity: editingProduct.stockQuantity !== undefined ? editingProduct.stockQuantity : 5,
+      stockQuantity: editingProduct.stockQuantity ?? null,
       variants:
         parsedVariants.length > 0
           ? parsedVariants
@@ -2545,11 +2357,11 @@ export default function AdminPage() {
                       min="0"
                       step="1"
                       placeholder="5 (0 = Esgotado / Sob encomenda)"
-                      value={editingProduct.stockQuantity ?? 5}
+                      value={editingProduct.stockQuantity ?? ""}
                       onChange={(e) =>
                         setEditingProduct({
                           ...editingProduct,
-                          stockQuantity: e.target.value === "" ? 5 : Number(e.target.value),
+                          stockQuantity: e.target.value === "" ? null : Number(e.target.value),
                         })
                       }
                     />
@@ -2672,8 +2484,8 @@ export default function AdminPage() {
                         <strong>{p.name}</strong>
                         <span>
                           {p.category} · {p.pricePix ? "PIX: " + formatCurrencyBRL(p.pricePix) : (formatCurrencyBRL(p.price) || "Sob consulta")} ·{" "}
-                          <span className={"stock-badge " + ((p.stockQuantity ?? 5) === 0 ? "stock-out" : (p.stockQuantity ?? 5) <= 2 ? "stock-low" : "stock-available")}>
-                            {(p.stockQuantity ?? 5) === 0 ? "Esgotado" : (p.stockQuantity ?? 5) + " un. estoque"}
+                          <span className={"stock-badge " + (p.stockQuantity == null ? "" : p.stockQuantity === 0 ? "stock-out" : p.stockQuantity <= 2 ? "stock-low" : "stock-available")}>
+                            {p.stockQuantity == null ? "Estoque sob consulta" : p.stockQuantity === 0 ? "Esgotado" : p.stockQuantity + " un. estoque"}
                           </span> ·{" "}
                           {p.published ? "Visível" : "Oculto"}
                         </span>
@@ -2841,6 +2653,7 @@ export default function AdminPage() {
               </div>
             </div>
 
+            {leadsLoadError && <div role="alert" className="admin-security-feedback"><p>{leadsLoadError}</p><button type="button" className="button button-outline" onClick={() => void refreshLeads()}>Tentar carregar contatos</button></div>}
             {/* Metrics cards */}
             <div className="crm-metrics-grid">
               <div className="crm-metric-card">
@@ -2871,6 +2684,7 @@ export default function AdminPage() {
                 <Search size={15} />
                 <input
                   type="text"
+                  aria-label="Buscar contatos por nome, telefone ou produto"
                   placeholder="Buscar por nome, telefone ou produto..."
                   value={crmSearch}
                   onChange={(e) => setCrmSearch(e.target.value)}
@@ -2917,6 +2731,7 @@ export default function AdminPage() {
                         </div>
                         <div className="crm-lead-status-wrap">
                           <select
+                            aria-label={`Status de ${lead.name}`}
                             className={"crm-status-select select-" + lead.status}
                             value={lead.status}
                             onChange={(e) =>
@@ -3025,97 +2840,15 @@ export default function AdminPage() {
 
         {/* TAB: NOTIFICAÇÕES PUSH PARA O APLICATIVO */}
         {tab === "push" && (
-          <div className="admin-section-card">
-            <div className="admin-products-head">
-              <div>
-                <h2>Notificações Push do Aplicativo</h2>
-                <p className="admin-sub">
-                  Envie avisos de novos lotes, reposição de estoque e promoções exclusivas direto na tela dos aparelhos dos clientes.
-                </p>
-              </div>
-            </div>
-
-            <div className="push-layout-grid">
-              {/* Push Composer Form */}
-              <form className="product-form push-composer-form" onSubmit={(e) => void handleSendPushBroadcast(e)}>
-                <h3>Criar Novo Disparo Push</h3>
-
-                <label>
-                  Título da Notificação
-                  <input
-                    type="text"
-                    required
-                    maxLength={60}
-                    placeholder="Ex.: 🚀 Chegou iPhone 16 Pro Max na WPlay!"
-                    value={pushTitleDraft}
-                    onChange={(e) => setPushTitleDraft(e.target.value)}
-                  />
-                </label>
-
-                <label>
-                  Mensagem / Chamada
-                  <textarea
-                    rows={3}
-                    required
-                    maxLength={140}
-                    placeholder="Ex.: Acabamos de receber unidades lacradas com preço especial no PIX e retirada imediata em Ipaussu!"
-                    value={pushBodyDraft}
-                    onChange={(e) => setPushBodyDraft(e.target.value)}
-                  />
-                </label>
-
-                <label>
-                  Link de Destino ao clicar (opcional)
-                  <input
-                    type="text"
-                    placeholder="/ ou link para produto específico"
-                    value={pushUrlDraft}
-                    onChange={(e) => setPushUrlDraft(e.target.value)}
-                  />
-                </label>
-
-                <div className="push-form-actions">
-                  <button type="submit" className="button button-lime" disabled={isSendingPush}>
-                    <Send size={15} /> {isSendingPush ? "Disparando..." : "Disparar para Clientes Inscritos"}
-                  </button>
-                  <button type="button" className="button button-outline" onClick={() => void handleTestLocalPush()}>
-                    <Bell size={15} /> Testar no meu Dispositivo
-                  </button>
-                </div>
-              </form>
-
-              {/* Push History */}
-              <div className="push-history-panel">
-                <h3>Histórico de Disparos</h3>
-                {pushCampaigns.length === 0 ? (
-                  <p className="admin-sub">Nenhum disparo realizado ainda.</p>
-                ) : (
-                  <div className="push-history-list">
-                    {pushCampaigns.map((camp) => (
-                      <div key={camp.id} className="push-history-card">
-                        <div className="push-history-head">
-                          <strong>{camp.title}</strong>
-                          <span className="push-history-date">
-                            {new Date(camp.createdAt).toLocaleDateString("pt-BR", {
-                              day: "2-digit",
-                              month: "2-digit",
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
-                          </span>
-                        </div>
-                        <p className="push-history-body">{camp.body}</p>
-                        <div className="push-history-stats">
-                          <span>🔔 {camp.sentCount} inscritos notificados</span>
-                          <span>👉 {0} cliques</span>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
+          <section className="admin-section-card" aria-labelledby="push-test-title">
+            <h2 id="push-test-title">Teste de notificação neste dispositivo</h2>
+            <p className="admin-sub">Confira como a mensagem aparece no seu navegador. O envio para clientes ainda não está configurado.</p>
+            <form className="product-form" onSubmit={(event) => { event.preventDefault(); void handleTestLocalPush(); }}>
+              <label>Título da notificação<input required maxLength={60} value={pushTitleDraft} onChange={(event) => setPushTitleDraft(event.target.value)} /></label>
+              <label>Mensagem<textarea required maxLength={140} rows={3} value={pushBodyDraft} onChange={(event) => setPushBodyDraft(event.target.value)} /></label>
+              <button type="submit" className="button button-lime" disabled={isSendingPush}><Bell size={16} />{isSendingPush ? "Aguardando o navegador…" : "Testar neste dispositivo"}</button>
+            </form>
+          </section>
         )}
 
         {/* TAB 4: SEGURANÇA, ROTAS OCULTAS & DIAGNÓSTICO DE LINKS */}

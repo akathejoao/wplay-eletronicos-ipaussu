@@ -1,7 +1,7 @@
 "use client";
 
 import React, { useState } from "react";
-import { Plus, Trash2, Smartphone, Sparkles, Check, Info } from "lucide-react";
+import { Plus, Trash2, Smartphone, Info } from "lucide-react";
 import { iphoneLineup, type IphoneModelSpec, type IphoneFinish } from "@/lib/iphone-models";
 
 interface AdminPhoneModelsTabProps {
@@ -71,7 +71,7 @@ export function AdminPhoneModelsTab({
     } else if (preset === "s24") {
       setModelName("Galaxy S24 Ultra");
       setShortName("S24 Ultra");
-      setGeneration(24 as any);
+      setGeneration(24);
       setTier("promax");
       setDisplaySize('6,8"');
       setCameraLayout("vertical-dual");
@@ -89,7 +89,7 @@ export function AdminPhoneModelsTab({
     } else if (preset === "xiaomi14") {
       setModelName("Xiaomi 14 Ultra");
       setShortName("14 Ultra");
-      setGeneration(14 as any);
+      setGeneration(14);
       setTier("promax");
       setDisplaySize('6,73"');
       setCameraLayout("pro-plateau");
@@ -139,7 +139,7 @@ export function AdminPhoneModelsTab({
       id: cleanId,
       name: modelName.trim(),
       shortName: shortName.trim() || modelName.trim(),
-      generation: Number(generation) as any,
+      generation: Number(generation),
       tier,
       displaySize: displaySize.trim() || '6,1"',
       cameraLayout,
@@ -152,25 +152,26 @@ export function AdminPhoneModelsTab({
 
     const nextList = [...customModels, newModel];
     setSaving(true);
-    const success = await onSaveModels(nextList);
-    setSaving(false);
-
-    if (success) {
-      showToast(`Modelo "${newModel.name}" adicionado às opções 3D!`);
-      setModelName("");
-      setShortName("");
-    }
+    try {
+      if (await onSaveModels(nextList)) {
+        showToast(`Modelo "${newModel.name}" adicionado às opções 3D!`);
+        setModelName("");
+        setShortName("");
+      }
+    } catch {
+      showToast("Não foi possível salvar o modelo. Tente novamente.");
+    } finally { setSaving(false); }
   };
 
   const handleDeleteModel = async (id: string, name: string) => {
     if (!window.confirm(`Tem certeza que deseja remover o modelo "${name}"?`)) return;
     const nextList = customModels.filter((m) => m.id !== id);
     setSaving(true);
-    const success = await onSaveModels(nextList);
-    setSaving(false);
-    if (success) {
-      showToast(`Modelo "${name}" removido.`);
-    }
+    try {
+      if (await onSaveModels(nextList)) showToast(`Modelo "${name}" removido.`);
+    } catch {
+      showToast("Não foi possível remover o modelo. Tente novamente.");
+    } finally { setSaving(false); }
   };
 
   return (
@@ -198,7 +199,7 @@ export function AdminPhoneModelsTab({
             </p>
           </div>
         ) : (
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: 14 }}>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(min(100%, 280px), 1fr))", gap: 14 }}>
             {customModels.map((m) => (
               <div
                 key={m.id}
@@ -333,6 +334,8 @@ export function AdminPhoneModelsTab({
             <span>Linha / Geração (Número)</span>
             <input
               type="number"
+              min={1}
+              step={1}
               value={generation}
               onChange={(e) => setGeneration(Number(e.target.value))}
               required
@@ -341,7 +344,7 @@ export function AdminPhoneModelsTab({
 
           <label>
             <span>Categoria / Tier</span>
-            <select value={tier} onChange={(e) => setTier(e.target.value as any)}>
+            <select value={tier} onChange={(e) => setTier(e.target.value as IphoneModelSpec["tier"])}>
               <option value="promax">Pro Max / Ultra (Topo de Linha)</option>
               <option value="pro">Pro (Profissional)</option>
               <option value="base">Base / Padrão</option>

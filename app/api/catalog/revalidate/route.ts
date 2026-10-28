@@ -2,6 +2,7 @@ import { createClient } from "@supabase/supabase-js";
 import { revalidatePath, revalidateTag } from "next/cache";
 import { NextResponse } from "next/server";
 import { catalogCacheTag } from "@/lib/catalog-cache";
+import { requireStoreAdmin } from "@/lib/admin-access";
 
 export async function POST(request: Request) {
   const authorization = request.headers.get("authorization");
@@ -16,12 +17,11 @@ export async function POST(request: Request) {
     global: { headers: { Authorization: authorization } },
   });
   try {
-    const { data, error } = await client.from("store_owners").select("user_id").limit(1);
-    if (error || !data?.length) return NextResponse.json({ error: "Acesso não autorizado." }, { status: 403 });
+    await requireStoreAdmin(client);
     revalidateTag(catalogCacheTag);
     revalidatePath("/api/catalog");
     return NextResponse.json({ revalidated: true }, { headers: { "Cache-Control": "no-store" } });
   } catch {
-    return NextResponse.json({ error: "Não foi possível atualizar a vitrine agora." }, { status: 503 });
+    return NextResponse.json({ error: "Acesso não autorizado ou indisponível. Entre novamente e tente atualizar a vitrine." }, { status: 403, headers: { "Cache-Control": "no-store" } });
   }
 }

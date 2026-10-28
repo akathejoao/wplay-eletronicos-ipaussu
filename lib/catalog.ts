@@ -1,4 +1,4 @@
-import type { IphoneModelSpec } from "./iphone-models";
+import { isPhoneModelSpec, type IphoneModelSpec } from "./iphone-models";
 import type { SyntheticEvent } from "react";
 
 export type ProductCategory = string;
@@ -435,18 +435,18 @@ export function normalizeProduct(raw: Partial<Product>, index: number): Product 
   const fallbackVariants = getDefaultVariantsForCategory(categoryName);
 
   const parsedPrice =
-    raw.price !== null && raw.price !== undefined && !Number.isNaN(Number(raw.price))
+    raw.price !== null && raw.price !== undefined && Number.isFinite(Number(raw.price)) && Number(raw.price) >= 0
       ? Number(raw.price)
       : null;
 
   const parsedPricePix =
-    raw.pricePix !== null && raw.pricePix !== undefined && !Number.isNaN(Number(raw.pricePix))
+    raw.pricePix !== null && raw.pricePix !== undefined && Number.isFinite(Number(raw.pricePix)) && Number(raw.pricePix) >= 0
       ? Number(raw.pricePix)
-      : parsedPrice ? Math.round(parsedPrice * 0.92) : null;
+      : null;
 
   const stockParsed =
-    raw.stockQuantity !== null && raw.stockQuantity !== undefined && !Number.isNaN(Number(raw.stockQuantity))
-      ? Number(raw.stockQuantity)
+    raw.stockQuantity !== null && raw.stockQuantity !== undefined && Number.isFinite(Number(raw.stockQuantity))
+      ? Math.max(0, Math.floor(Number(raw.stockQuantity)))
       : null;
 
   return {
@@ -457,7 +457,7 @@ export function normalizeProduct(raw: Partial<Product>, index: number): Product 
     badge: typeof raw.badge === "string" && raw.badge.trim() ? raw.badge : "Sob consulta",
     price: parsedPrice,
     pricePix: parsedPricePix,
-    installments: typeof raw.installments === "string" && raw.installments.trim() ? raw.installments.trim() : parsedPrice ? `12x de ${formatCurrencyBRL(Math.round(parsedPrice / 12))}` : null,
+    installments: typeof raw.installments === "string" && raw.installments.trim() ? raw.installments.trim() : null,
     stockQuantity: stockParsed,
     image: migratedImage,
     imageFit: raw.imageFit === "contain" ? "contain" : "cover",
@@ -551,6 +551,7 @@ export function normalizeSettings(raw?: Partial<StoreSettings> | null): StoreSet
     hero_slides: heroSlides,
     attendance_note:
       raw.attendance_note?.trim() || defaultStoreSettings.attendance_note,
+    custom_phone_models: Array.isArray(raw.custom_phone_models) ? raw.custom_phone_models.filter(isPhoneModelSpec) : [],
     admin_user: raw.admin_user?.trim() || defaultStoreSettings.admin_user,
     admin_pin: raw.admin_pin?.trim() || defaultStoreSettings.admin_pin,
     admin_pin_hash:

@@ -60,8 +60,8 @@ export function AdminAccessManager({ supabase }: { supabase: SupabaseClient }) {
     setMessage("");
     setError("");
     try {
-      const { error: grantError } = await supabase.rpc("grant_store_admin", { target_email: normalized });
-      if (grantError) throw new Error("Não foi possível conceder acesso. Verifique sua permissão e tente novamente.");
+      const { data: granted, error: grantError } = await supabase.rpc("grant_store_admin", { target_email: normalized });
+      if (grantError || granted !== true) throw new Error("Não foi possível conceder acesso. Verifique sua permissão e tente novamente.");
       setEmail("");
       await refresh();
       setMessage("Acesso autorizado. Compartilhe o endereço deste painel com a pessoa; ela deverá entrar usando o e-mail autorizado e confirmar o acesso pelo próprio e-mail.");
@@ -79,8 +79,8 @@ export function AdminAccessManager({ supabase }: { supabase: SupabaseClient }) {
     setMessage("");
     setError("");
     try {
-      const { error: revokeError } = await supabase.rpc("revoke_store_admin", { target_user_id: owner.user_id });
-      if (revokeError) throw new Error("Não foi possível remover esse administrador.");
+      const { data: revoked, error: revokeError } = await supabase.rpc("revoke_store_admin", { target_user_id: owner.user_id });
+      if (revokeError || revoked !== true) throw new Error("Não foi possível remover esse administrador.");
       await refresh();
       setMessage("Acesso removido. Essa conta não pode mais alterar os dados da loja.");
     } catch (caught) {

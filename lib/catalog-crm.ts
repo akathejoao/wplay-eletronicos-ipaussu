@@ -1,58 +1,5 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { CustomerLead, PushNotificationCampaign, leadsStorageKey, pushSubsStorageKey } from "@/lib/catalog";
-
-export const initialMockLeads: CustomerLead[] = [
-  {
-    id: "lead-1",
-    createdAt: new Date(Date.now() - 3600000 * 4).toISOString(),
-    name: "Lucas Alcantara",
-    whatsapp: "5514997812345",
-    productName: "iPhone 16 Pro Max · 256 GB",
-    productId: "iphone-pro",
-    variantChosen: "Titânio-deserto · Lacrado",
-    notes: "Interessado na condição à vista no PIX, perguntou sobre retirada na loja hoje.",
-    status: "em_negociacao",
-    estimatedValue: 7890,
-    lastFollowUpAt: new Date(Date.now() - 3600000 * 2).toISOString(),
-  },
-  {
-    id: "lead-2",
-    createdAt: new Date(Date.now() - 86400000).toISOString(),
-    name: "Mariana Souza",
-    whatsapp: "5514998765432",
-    productName: "Scooter Elétrica WPlay",
-    productId: "scooter-eletrica",
-    variantChosen: "60V 3000W Fat Urbana",
-    notes: "Quer simular em 18x no cartão e saber se tem pronta entrega na cor preta.",
-    status: "novo",
-    estimatedValue: 11990,
-  },
-  {
-    id: "lead-3",
-    createdAt: new Date(Date.now() - 86400000 * 2).toISOString(),
-    name: "Carlos Eduardo",
-    whatsapp: "5514996541289",
-    productName: "Perfumes Importados & Árabes",
-    productId: "perfumes-importados",
-    variantChosen: "Árabe Oudh Especial 100ml",
-    notes: "Comprou 2 unidades para presente. Excelente cliente.",
-    status: "fechado",
-    estimatedValue: 698,
-    lastFollowUpAt: new Date(Date.now() - 86400000).toISOString(),
-  },
-  {
-    id: "lead-4",
-    createdAt: new Date(Date.now() - 86400000 * 3).toISOString(),
-    name: "Fernanda Lima",
-    whatsapp: "5514991238901",
-    productName: "iPhone 15 Pro Max 256GB",
-    productId: "iphone-pro",
-    variantChosen: "Titânio Natural",
-    notes: "Aguardando reposição de seminovo com saúde de bateria acima de 90%.",
-    status: "aguardando_reposicao",
-    estimatedValue: 5690,
-  },
-];
+import { CustomerLead, leadsStorageKey } from "@/lib/catalog";
 
 export async function saveCustomerLead(
   lead: Omit<CustomerLead, "id" | "createdAt">,
@@ -67,7 +14,7 @@ export async function saveCustomerLead(
   // 1. If Supabase is available, attempt to write directly to customer_leads
   if (supabase) {
     try {
-      await supabase.from("customer_leads").insert({
+      const { error } = await supabase.from("customer_leads").insert({
         id: newLead.id,
         name: newLead.name,
         whatsapp: newLead.whatsapp,
@@ -78,12 +25,14 @@ export async function saveCustomerLead(
         status: newLead.status,
         estimated_value: newLead.estimatedValue || null,
       });
+      if (error) throw new Error("Não foi possível registrar o contato.");
+      return newLead;
     } catch {
-      // Fallback gracefully to localStorage
+      throw new Error("Não foi possível registrar o contato na loja.");
     }
   }
 
-  // 2. Always persist locally for offline/demo resilience
+  // Local persistence is only used by the local demo, without a cloud client.
   try {
     const existing = getStoredLeads();
     const updated = [newLead, ...existing.filter((l) => l.id !== newLead.id)].slice(0, 200);
@@ -97,17 +46,16 @@ export async function saveCustomerLead(
 }
 
 export function getStoredLeads(): CustomerLead[] {
-  if (typeof window === "undefined") return initialMockLeads;
+  if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem(leadsStorageKey);
     if (!raw) {
-      localStorage.setItem(leadsStorageKey, JSON.stringify(initialMockLeads));
-      return initialMockLeads;
+      return [];
     }
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) && parsed.length > 0 ? parsed : initialMockLeads;
+    return Array.isArray(parsed) ? parsed : [];
   } catch {
-    return initialMockLeads;
+    return [];
   }
 }
 
@@ -120,7 +68,7 @@ export async function loadLeads(supabase?: SupabaseClient | null): Promise<Custo
         .order("created_at", { ascending: false })
         .limit(100);
 
-      if (!error && Array.isArray(data) && data.length > 0) {
+      if (!error && Array.isArray(data)) {
         const mapped: CustomerLead[] = data.map((row) => ({
           id: row.id,
           createdAt: row.created_at,
@@ -134,13 +82,11 @@ export async function loadLeads(supabase?: SupabaseClient | null): Promise<Custo
           estimatedValue: row.estimated_value,
           lastFollowUpAt: row.last_follow_up_at,
         }));
-        try {
-          localStorage.setItem(leadsStorageKey, JSON.stringify(mapped));
-        } catch {}
         return mapped;
       }
+      throw new Error("Não foi possível carregar os contatos. Verifique sua conexão e permissão.");
     } catch {
-      // Fallback to local
+      throw new Error("Não foi possível carregar os contatos. Verifique sua conexão e permissão.");
     }
   }
   return getStoredLeads();
@@ -160,8 +106,9 @@ export async function updateLeadStatus(
         last_follow_up_at: now,
       };
       if (notes !== undefined) patch.notes = notes;
-      await supabase.from("customer_leads").update(patch).eq("id", id);
-    } catch {}
+      const { data, error } = await supabase.from("customer_leads").update(patch).eq("id", id).select("id");
+      return !error && Boolean(data?.length);
+    } catch { return false; }
   }
 
   try {
@@ -185,8 +132,9 @@ export async function deleteCustomerLead(
 ): Promise<boolean> {
   if (supabase) {
     try {
-      await supabase.from("customer_leads").delete().eq("id", id);
-    } catch {}
+      const { data, error } = await supabase.from("customer_leads").delete().eq("id", id).select("id");
+      return !error && Boolean(data?.length);
+    } catch { return false; }
   }
   try {
     const existing = getStoredLeads();

@@ -16,7 +16,7 @@ export async function notifyCatalogChanged(client: SupabaseClient): Promise<bool
       signal: AbortSignal.timeout(10_000),
     });
     if (!response.ok) return false;
-    localStorage.removeItem(publicCatalogStorageKey);
+    try { localStorage.removeItem(publicCatalogStorageKey); } catch { /* Storage may be disabled. */ }
     window.dispatchEvent(new Event(catalogChangedEvent));
     return true;
   } catch {

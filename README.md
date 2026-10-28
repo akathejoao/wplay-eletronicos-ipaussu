@@ -44,7 +44,7 @@ Não publique `.env.local`, pastas de cache, arquivos de credenciais ou dados de
 
 ## Verificação
 
-Execute `npx tsc --noEmit`, `npm audit --omit=dev` e `npm run build` antes de publicar. Não rode o build enquanto o servidor de desenvolvimento usa a mesma pasta `.next`.
+Execute `npm test`, `npx tsc --noEmit`, `npm audit --omit=dev` e `npm run build` antes de publicar. Não rode o build enquanto o servidor de desenvolvimento usa a mesma pasta `.next`.
 
 Após o deploy, confira a vitrine em celular, os links para o WhatsApp, o acesso administrativo e a persistência de uma alteração em outro navegador. Um pedido pelo WhatsApp não representa pagamento ou reserva de estoque.
 
@@ -65,3 +65,29 @@ Como referência de planejamento, 10 mil sessões com cinco minutos de navegaç�
 Confira semanalmente **Supabase → Organization → Usage**, principalmente egress e Storage, e com maior frequência após campanhas ou novos uploads. Considere 70% como alerta operacional e 85% como sinal para reduzir tráfego/uploads ou rever o plano; esses percentuais são recomendações, não alertas automáticos implementados. Não houve alteração de plano, cobrança ou configuração de gasto.
 
 Referências: [Egress](https://supabase.com/docs/guides/platform/manage-your-usage/egress), [Bandwidth do Storage](https://supabase.com/docs/guides/storage/serving/bandwidth), [limites e política de uso](https://supabase.com/docs/guides/platform/billing-faq).
+
+## Instalação do app
+
+O botão **Baixar app** do cabeçalho e a seção **A WPlay na sua tela inicial** abrem as opções Android e iPhone/iPad. No iOS, o guia é selecionado automaticamente, inclusive no iPad com identificação de desktop. Outros navegadores no iOS recebem orientação para abrir o Safari.
+
+- **Android pelo navegador:** use a oferta de instalação do Chrome quando disponível ou o menu **Adicionar à tela inicial / Instalar app**.
+- **iPhone/iPad:** no Safari, toque em **Compartilhar → Adicionar à Tela de Início → Adicionar**. Os nomes e a posição do menu podem variar conforme a versão do iOS.
+- **APK Android:** publique um aplicativo real, compilado e assinado, em `public/downloads/wplay-app.apk`. A rota `/api/download/apk` entrega o arquivo como anexo e oferece `HEAD` para verificar a disponibilidade. Enquanto o arquivo não existir, a interface informa a indisponibilidade e mantém o guia pelo navegador.
+
+O arquivo anterior era um ZIP com manifesto não compilado, DEX vazio e assinatura fictícia; foi retirado da distribuição. `scripts/build-apk.py` agora valida um APK existente com `apksigner` e `aapt` do Android SDK, antes de copiá-lo para a pasta pública:
+
+```powershell
+python scripts/build-apk.py caminho/app-release.apk --build-tools caminho/Android/Sdk/build-tools/35.0.0
+```
+
+Esse comando não compila um aplicativo e não cria uma chave de assinatura. O responsável pelo app precisa fornecer o APK de release. Depois de publicar o arquivo, gere um novo build/deploy para incluir o binário na função de download.
+
+A instalação PWA exige HTTPS em produção. O service worker mostra uma página de reconexão quando não há internet; ele não armazena preços, respostas de API nem páginas administrativas. A consulta do catálogo exige conexão. O site não implementa envio de notificações a clientes; o painel oferece apenas um teste local, com permissão do navegador.
+
+## Compatibilidade do banco
+
+As leituras aceitam bancos anteriores às colunas opcionais de preço PIX, parcelamento, estoque e modelos personalizados. Erros de permissão continuam sendo exibidos. Gravações não descartam campos para aparentar sucesso: se uma coluna necessária estiver ausente, o painel informa a falha.
+
+Os modelos personalizados exigem `store_settings.custom_phone_models`; preço PIX, parcelamento, estoque e CRM têm estrutura de referência em `supabase/crm-leads-stock.sql`. A correção de permissões em `supabase/fix-store-owners-access.sql` pressupõe os helpers privados de `supabase/schema.sql`, preserva os privilégios do administrador principal e não cadastra administradores por e-mail fixo. Revise esses arquivos e aplique as alterações pelo processo de migração do banco antes de usar as funções correspondentes. Nenhuma alteração no banco remoto é feita automaticamente pelo site.
+
+O CRM online não usa contatos fictícios nem armazena a lista privada de clientes no localStorage. Uma consulta vazia permanece vazia; falhas de leitura e gravação são informadas no painel. O pedido inicial começa vazio, e o site registra interesse somente quando o cliente informa um telefone.

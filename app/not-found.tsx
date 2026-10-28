@@ -56,16 +56,16 @@ export default function NotFoundPage() {
 
         <div className="notfound-badge">
           <Compass size={14} />
-          <span>Redirecionamento Inteligente · Link Protegido</span>
+          <span>Página não encontrada</span>
         </div>
 
-        <h1>Este link mudou ou foi atualizado.</h1>
+        <h1>Não encontramos esta página.</h1>
         <p className="notfound-desc">
           {attemptedPath ? (
             <>
               O endereço <code>{attemptedPath}</code> não está ativo no momento, mas a vitrine
-              oficial da <strong>WPlay Eletrônicos</strong> está pronta com iPhones (13 ao 18
-              Pro Max), Scooters Elétricas, Perfumes e Áudio.
+              oficial da <strong>WPlay Eletrônicos</strong> continua disponível. Consulte
+              os produtos ou fale com a equipe pelo WhatsApp.
             </>
           ) : (
             <>

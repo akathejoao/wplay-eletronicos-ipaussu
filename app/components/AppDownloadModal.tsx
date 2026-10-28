@@ -1,223 +1,137 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
-import { X, Download, Smartphone, Apple, CheckCircle2, Share, PlusSquare, ArrowRight, ShieldCheck } from "lucide-react";
+import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
+import { Apple, Check, Copy, Download, PlusSquare, Share, Smartphone, X } from "lucide-react";
+import { detectInstallPlatform, type InstallPlatform } from "@/lib/app-install";
 
 interface AppDownloadModalProps {
   isOpen: boolean;
   onClose: () => void;
-  initialTab?: "android" | "ios" | "desktop";
-  onTriggerPwaInstall?: () => Promise<void>;
-  hasPwaPrompt?: boolean;
+  initialTab?: InstallPlatform;
+  onTriggerPwaInstall: () => Promise<void>;
+  hasPwaPrompt: boolean;
+  installed: boolean;
 }
 
-export function AppDownloadModal({
-  isOpen,
-  onClose,
-  initialTab,
-  onTriggerPwaInstall,
-  hasPwaPrompt,
-}: AppDownloadModalProps) {
-  const [activeTab, setActiveTab] = useState<"android" | "ios" | "desktop">("android");
+export function AppDownloadModal({ isOpen, onClose, initialTab, onTriggerPwaInstall, hasPwaPrompt, installed }: AppDownloadModalProps) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  const id = useId();
+  const [activeTab, setActiveTab] = useState<InstallPlatform>("android");
+  const [apkStatus, setApkStatus] = useState<"checking" | "available" | "unavailable">("checking");
+  const [needsSafari, setNeedsSafari] = useState(false);
+  const [copyStatus, setCopyStatus] = useState("");
+  const [installing, setInstalling] = useState(false);
+
+  useLayoutEffect(() => {
+    const dialog = dialogRef.current;
+    if (!isOpen || !dialog) return;
+    setActiveTab(initialTab ?? detectInstallPlatform(navigator));
+    setCopyStatus("");
+    setNeedsSafari(detectInstallPlatform(navigator) === "ios" &&
+      (!/Safari/i.test(navigator.userAgent) || /CriOS|FxiOS|EdgiOS|OPiOS|Instagram|FBAN|FBAV/i.test(navigator.userAgent)));
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    if (!dialog.open) dialog.showModal();
+    return () => {
+      dialog.close();
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [isOpen, initialTab]);
 
   useEffect(() => {
-    if (initialTab) {
-      setActiveTab(initialTab);
-      return;
-    }
-    if (typeof navigator !== "undefined") {
-      const ua = navigator.userAgent.toLowerCase();
-      if (/iphone|ipad|ipod/.test(ua)) {
-        setActiveTab("ios");
-      } else if (/android/.test(ua)) {
-        setActiveTab("android");
-      } else {
-        setActiveTab("android");
-      }
-    }
-  }, [initialTab, isOpen]);
+    if (!isOpen) return;
+    const controller = new AbortController();
+    let cancelled = false;
+    const timeout = window.setTimeout(() => controller.abort(), 10_000);
+    setApkStatus("checking");
+    void fetch("/api/download/apk", { method: "HEAD", cache: "no-store", signal: controller.signal })
+      .then((response) => {
+        if (!cancelled) setApkStatus(response.ok ? "available" : "unavailable");
+      })
+      .catch(() => { if (!cancelled) setApkStatus("unavailable"); })
+      .finally(() => window.clearTimeout(timeout));
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+      controller.abort();
+    };
+  }, [isOpen]);
 
-  if (!isOpen) return null;
+  const copySiteLink = async () => {
+    try {
+      await navigator.clipboard.writeText(`${window.location.origin}/`);
+      setCopyStatus("Link copiado. Cole na barra de endereços do Safari.");
+    } catch {
+      setCopyStatus(`Abra o Safari e acesse ${window.location.origin}/`);
+    }
+  };
+
+  const installFromBrowser = async () => {
+    setInstalling(true);
+    try { await onTriggerPwaInstall(); }
+    finally { setInstalling(false); }
+  };
 
   return (
-    <div className="ios-install-backdrop" onClick={onClose} role="dialog" aria-modal="true">
-      <div
-        className="ios-install-sheet app-download-sheet"
-        onClick={(e) => e.stopPropagation()}
-        tabIndex={-1}
-      >
-        <button
-          type="button"
-          className="ios-install-close"
-          onClick={onClose}
-          aria-label="Fechar janela"
-        >
-          <X size={18} />
-        </button>
+    <dialog ref={dialogRef} className="app-install-dialog" aria-labelledby={`${id}-title`} aria-describedby={`${id}-description`}
+      onCancel={(event) => { event.preventDefault(); onClose(); }}
+      onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+      {isOpen && <div className="app-install-sheet">
+        <button type="button" className="app-install-close" onClick={onClose} aria-label="Fechar instalação do app" autoFocus><X size={20} /></button>
+        <header className="app-install-heading">
+          <img src="/icons/apple-touch-icon.png" alt="" width={56} height={56} />
+          <div><h2 id={`${id}-title`}>Leve a WPlay com você.</h2><p id={`${id}-description`}>Acesse o catálogo direto da tela inicial do seu celular.</p></div>
+        </header>
 
-        {/* Header */}
-        <div className="ios-install-header">
-          <div className="ios-app-icon-wrap">
-            <img
-              src="/images/wplay-logo-official.png"
-              alt="WPlay App"
-              className="ios-app-icon-img"
-            />
-          </div>
-          <div>
-            <h3>Baixar Aplicativo WPlay</h3>
-            <p>Tenha acesso rápido ao estoque, preços reais e ofertas exclusivas</p>
-          </div>
+        {installed && <p className="app-install-note"><Check size={18} /> A WPlay já está instalada neste dispositivo.</p>}
+
+        <div className="app-install-tabs" role="tablist" aria-label="Sistema do celular">
+          {(["android", "ios"] as const).map((tab) => (
+            <button key={tab} type="button" role="tab" id={`${id}-${tab}-tab`} aria-selected={activeTab === tab}
+              aria-controls={`${id}-${tab}-panel`} tabIndex={activeTab === tab ? 0 : -1}
+              onClick={() => setActiveTab(tab)}
+              onKeyDown={(event) => {
+                if (!["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
+                event.preventDefault();
+                const next = event.key === "Home" ? "android" : event.key === "End" ? "ios" : tab === "android" ? "ios" : "android";
+                setActiveTab(next);
+                document.getElementById(`${id}-${next}-tab`)?.focus();
+              }}>
+              {tab === "android" ? <Smartphone size={18} /> : <Apple size={18} />}
+              {tab === "android" ? "Android" : "iPhone / iPad"}
+            </button>
+          ))}
         </div>
 
-        {/* Tab Switcher */}
-        <div className="app-download-tabs">
-          <button
-            type="button"
-            className={`app-download-tab-btn ${activeTab === "android" ? "active" : ""}`}
-            onClick={() => setActiveTab("android")}
-          >
-            <Smartphone size={16} />
-            <span>Android (APK)</span>
-          </button>
-          <button
-            type="button"
-            className={`app-download-tab-btn ${activeTab === "ios" ? "active" : ""}`}
-            onClick={() => setActiveTab("ios")}
-          >
-            <Apple size={16} />
-            <span>iPhone (iOS)</span>
-          </button>
-        </div>
-
-        {/* TAB ANDROID */}
-        {activeTab === "android" && (
-          <div className="app-download-content">
-            <div className="app-download-banner">
-              <div className="app-badge-pill">
-                <ShieldCheck size={14} /> Arquivo Verificado & Seguro
-              </div>
-              <h4>Instalação Direta no Android</h4>
-              <p>Baixe o arquivo de instalação (.apk) diretamente para seu celular sem precisar de lojas externas.</p>
-
-              <div className="app-download-actions">
-                <a
-                  href="/api/download/apk"
-                  download="WPlay-Eletronicos.apk"
-                  className="app-btn-download-primary"
-                >
-                  <Download size={18} />
-                  <span>
-                    <strong>Baixar APK Direto</strong>
-                    <small>Versão 1.0.0 Oficial (APK Rápido)</small>
-                  </span>
-                </a>
-
-                {hasPwaPrompt && onTriggerPwaInstall && (
-                  <button
-                    type="button"
-                    className="app-btn-pwa-secondary"
-                    onClick={() => {
-                      void onTriggerPwaInstall();
-                      onClose();
-                    }}
-                  >
-                    <span>Ou Instalar via Navegador (PWA Instantâneo)</span>
-                  </button>
-                )}
-              </div>
-            </div>
-
-            <div className="app-install-steps">
-              <h5>Como instalar após o download:</h5>
-              <div className="app-step-item">
-                <span className="app-step-num">1</span>
-                <div>
-                  <strong>Toque em Baixar APK</strong>
-                  <p>O download começará automaticamente no seu navegador.</p>
-                </div>
-              </div>
-              <div className="app-step-item">
-                <span className="app-step-num">2</span>
-                <div>
-                  <strong>Abra o arquivo baixado</strong>
-                  <p>Abra a barra de notificações ou a pasta "Downloads" e toque em <code>WPlay-Eletronicos.apk</code>.</p>
-                </div>
-              </div>
-              <div className="app-step-item">
-                <span className="app-step-num">3</span>
-                <div>
-                  <strong>Permita a instalação e conclua</strong>
-                  <p>Se solicitado pelo Android, marque "Permitir desta fonte" e confirme a instalação.</p>
-                </div>
-              </div>
-            </div>
+        <section role="tabpanel" id={`${id}-android-panel`} aria-labelledby={`${id}-android-tab`} hidden={activeTab !== "android"} tabIndex={0}>
+          <h3>Instalar no Android</h3>
+          <p>Adicione a WPlay pelo navegador ou baixe o aplicativo em APK quando estiver disponível.</p>
+          {hasPwaPrompt && !installed && <button type="button" className="app-install-primary" disabled={installing} onClick={() => void installFromBrowser()}>
+            <PlusSquare size={18} /> {installing ? "Aguardando o navegador…" : "Instalar pelo navegador"}
+          </button>}
+          <div className="app-install-apk">
+            {apkStatus === "available" ? <>
+              <a href="/api/download/apk" download="WPlay-Eletronicos.apk" className="app-install-primary"><Download size={18} /> Baixar APK para Android</a>
+              <ol className="app-install-steps"><li>Abra <strong>WPlay-Eletronicos.apk</strong> na pasta Downloads.</li><li>Se o Android solicitar, autorize a instalação por esse navegador.</li><li>Toque em <strong>Instalar</strong> e aguarde a conclusão.</li></ol>
+            </> : <p className="app-install-note" role="status">{apkStatus === "checking" ? "Verificando o download do APK…" : "O APK está indisponível no momento. Você pode adicionar a WPlay pelo navegador."}</p>}
           </div>
-        )}
+          <h4>Adicionar pelo Chrome</h4>
+          <ol className="app-install-steps"><li>Abra este site no <strong>Chrome</strong> do celular.</li><li>Toque no menu do navegador e em <strong>Adicionar à tela inicial</strong> ou <strong>Instalar app</strong>.</li><li>Confirme a opção exibida pelo navegador.</li></ol>
+        </section>
 
-        {/* TAB IPHONE / IOS */}
-        {activeTab === "ios" && (
-          <div className="app-download-content">
-            <div className="app-download-banner ios-banner">
-              <div className="app-badge-pill">
-                <Apple size={14} /> Oficial para Safari / iOS
-              </div>
-              <h4>Como instalar o App no seu iPhone</h4>
-              <p>
-                No iPhone, você não precisa de APK. O sistema da Apple permite instalar o aplicativo completo direto pelo Safari em 3 passos:
-              </p>
-            </div>
-
-            <div className="ios-install-steps">
-              <div className="ios-step-card">
-                <div className="ios-step-icon">
-                  <Share size={20} />
-                </div>
-                <div className="ios-step-body">
-                  <span className="ios-step-label">Passo 1</span>
-                  <strong>Toque no botão Compartilhar</strong>
-                  <p>Na barra inferior do Safari, clique no ícone do quadrado com a seta para cima.</p>
-                </div>
-              </div>
-
-              <div className="ios-step-card">
-                <div className="ios-step-icon">
-                  <PlusSquare size={20} />
-                </div>
-                <div className="ios-step-body">
-                  <span className="ios-step-label">Passo 2</span>
-                  <strong>Selecione "Adicionar à Tela de Início"</strong>
-                  <p>Role o menu para baixo até encontrar a opção com o símbolo de mais (+).</p>
-                </div>
-              </div>
-
-              <div className="ios-step-card">
-                <div className="ios-step-icon">
-                  <CheckCircle2 size={20} />
-                </div>
-                <div className="ios-step-body">
-                  <span className="ios-step-label">Passo 3</span>
-                  <strong>Toque em "Adicionar"</strong>
-                  <p>No canto superior direito da tela, confirme em "Adicionar". Pronto!</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="ios-install-tip">
-              <p>
-                ✨ <strong>Vantagens no iPhone:</strong> Abre em tela cheia sem barra de endereço, carrega instantâneo e permite receber notificações de novas chegadas de aparelhos!
-              </p>
-            </div>
-          </div>
-        )}
-
-        {/* Footer */}
-        <div className="ios-install-footer">
-          <button type="button" className="ios-btn-got-it" onClick={onClose}>
-            Entendido, fechar
-          </button>
-        </div>
-      </div>
-    </div>
+        <section role="tabpanel" id={`${id}-ios-panel`} aria-labelledby={`${id}-ios-tab`} hidden={activeTab !== "ios"} tabIndex={0}>
+          <h3>Instalar no iPhone ou iPad</h3>
+          <p>Abra este site no <strong>Safari</strong> e adicione a WPlay à Tela de Início.</p>
+          {needsSafari && <div className="app-install-note app-install-safari"><p>Você está em outro navegador. Copie o link e abra no Safari para seguir os passos.</p><button type="button" className="app-install-secondary" onClick={() => void copySiteLink()}><Copy size={16} /> Copiar link do site</button><p role="status">{copyStatus}</p></div>}
+          <ol className="app-install-steps app-install-ios-steps">
+            <li><Share size={22} /><div><strong>Toque em Compartilhar</strong><p>Procure o quadrado com a seta para cima na barra do Safari. Em algumas versões, ele fica no menu Mais.</p></div></li>
+            <li><PlusSquare size={22} /><div><strong>Adicionar à Tela de Início</strong><p>Role as opções do menu até encontrar essa opção.</p></div></li>
+            <li><Check size={22} /><div><strong>Confirme em Adicionar</strong><p>Se aparecer “Abrir como App”, mantenha a opção ativada. O ícone da WPlay ficará na sua tela inicial.</p></div></li>
+          </ol>
+          <p className="app-install-note">A instalação usa o próprio site. Não é necessário baixar um APK no iPhone. A consulta ao catálogo precisa de conexão com a internet.</p>
+        </section>
+        <button type="button" className="app-install-secondary app-install-done" onClick={onClose}>Voltar à loja</button>
+      </div>}
+    </dialog>
   );
 }

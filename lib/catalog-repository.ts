@@ -1,8 +1,14 @@
 import type { HeroSlideConfig, Product, StoreSettings, StudioPhoto } from "@/lib/catalog";
 import type { IphoneModelSpec } from "@/lib/iphone-models";
 
-export const productColumns =
-  "id,name,category,description,badge,price,image,image_fit,image_position,image_scale,published,featured,variants,price_pix,installments,stock_quantity";
+export const basicProductColumns =
+  "id,name,category,description,badge,price,image,image_fit,image_position,image_scale,published,featured,variants";
+
+export const productColumns = `${basicProductColumns},price_pix,installments,stock_quantity`;
+
+export function isMissingColumnError(error: { code?: string } | null): boolean {
+  return error?.code === "42703" || error?.code === "PGRST204";
+}
 
 export const settingsColumns =
   "id,store_name,logo_url,hero_headline,whatsapp_url,whatsapp_phone,instagram_url,instagram_handle,city,address_line,postal_code,maps_url,hours_lines,custom_categories,custom_gallery,hero_slides,attendance_note";
@@ -11,7 +17,7 @@ export const settingsColumnsWithModels =
   "id,store_name,logo_url,hero_headline,whatsapp_url,whatsapp_phone,instagram_url,instagram_handle,city,address_line,postal_code,maps_url,hours_lines,custom_categories,custom_gallery,hero_slides,attendance_note,custom_phone_models";
 
 export const publicSettingsColumns =
-  "id,store_name,logo_url,hero_headline,whatsapp_url,whatsapp_phone,instagram_url,instagram_handle,city,address_line,postal_code,maps_url,hours_lines,custom_categories,hero_slides,attendance_note";
+  "id,store_name,logo_url,hero_headline,whatsapp_url,whatsapp_phone,instagram_url,instagram_handle,city,address_line,postal_code,maps_url,hours_lines,custom_categories,hero_slides,attendance_note,custom_phone_models";
 
 export function productFromDatabase(row: Record<string, unknown>): Partial<Product> {
   return {

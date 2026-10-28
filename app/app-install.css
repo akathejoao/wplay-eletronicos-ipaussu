@@ -1,0 +1,97 @@
+.app-install-dialog {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  border: 0;
+  background: transparent;
+  color: var(--paper);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.app-install-dialog[open] { display: grid; place-items: center; }
+.app-install-dialog::backdrop { background: rgb(0 8 4 / 82%); }
+.app-install-sheet { position: relative; width: min(100%, 520px); min-width: 0; padding: 28px; border: 1px solid var(--line-lime); border-radius: 14px; background: #0c1b12; overflow-wrap: anywhere; }
+.app-install-close { position: absolute; top: 8px; right: 8px; display: grid; place-items: center; width: 44px; height: 44px; border: 0; border-radius: 6px; background: transparent; color: var(--paper); cursor: pointer; }
+.app-install-heading { display: flex; align-items: center; gap: 16px; margin: 12px 16px 24px 0; }
+.app-install-heading img { flex: 0 0 56px; border-radius: 12px; }
+.app-install-heading h2 { margin: 0 0 6px; font: 600 clamp(22px, 5vw, 28px)/1.1 var(--display); letter-spacing: -0.03em; }
+.app-install-heading p, .app-install-sheet section > p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.6; }
+.app-install-tabs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px; padding: 4px; margin-bottom: 24px; border: 1px solid var(--line); border-radius: 8px; }
+.app-install-tabs button { display: flex; justify-content: center; align-items: center; gap: 8px; min-height: 44px; border: 0; border-radius: 4px; background: transparent; color: var(--muted); font: 600 14px var(--body); cursor: pointer; transition: background-color 160ms ease, color 160ms ease; }
+.app-install-tabs button[aria-selected="true"] { background: var(--lime); color: var(--ink); }
+.app-install-sheet h3 { margin: 0 0 8px; font: 600 20px/1.25 var(--display); }
+.app-install-sheet h4 { margin: 24px 0 12px; font-size: 15px; }
+.app-install-primary, .app-install-secondary { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; width: 100%; padding: 12px 16px; border: 0; border-radius: 6px; font: 600 14px/1.4 var(--body); text-align: center; text-decoration: none; cursor: pointer; transition: background-color 160ms ease; }
+.app-install-primary { margin-top: 20px; background: var(--lime); color: var(--ink); }
+.app-install-primary:hover { background: var(--lime-hover); }
+.app-install-primary:disabled { opacity: 0.65; cursor: wait; }
+.app-install-secondary { background: #14271b; color: var(--paper); }
+.app-install-secondary:hover, .app-install-close:hover { background: #203725; }
+.app-install-done { margin-top: 24px; }
+.app-install-steps { margin: 16px 0 0; padding-left: 22px; color: var(--muted); font-size: 14px; line-height: 1.6; }
+.app-install-steps li + li { margin-top: 12px; }
+.app-install-steps strong { color: var(--paper); font-weight: 600; }
+.app-install-ios-steps { list-style: none; padding: 0; margin-block: 24px; }
+.app-install-ios-steps li { display: flex; align-items: flex-start; gap: 14px; }
+.app-install-ios-steps svg { flex-shrink: 0; color: var(--lime); margin-top: 2px; }
+.app-install-ios-steps p { margin: 4px 0 0; }
+.app-install-note { display: flex; align-items: flex-start; gap: 8px; margin: 20px 0 0; padding: 14px 0; border-block: 1px solid var(--line); color: var(--muted); font-size: 13px; line-height: 1.6; }
+.app-install-note svg { flex-shrink: 0; color: var(--lime); }
+.app-install-safari { display: block; }
+.app-install-safari p { margin: 0 0 12px; }
+.app-install-safari p:last-child { margin: 12px 0 0; }
+.app-install-dialog :focus-visible { outline: 2px solid var(--lime); outline-offset: 3px; }
+.app-install-sheet section:focus-visible { outline-offset: 6px; }
+.storefront-clean .app-install-section { width: min(1260px, 90vw); margin: 0 auto 48px; padding-block: 32px; border-block: 1px solid var(--line); display: flex; justify-content: space-between; align-items: center; gap: 24px; }
+.app-install-section h2 { margin: 0 0 8px; font: 600 clamp(24px, 4vw, 32px)/1.1 var(--display); letter-spacing: -0.03em; }
+.app-install-section p { margin: 0; max-width: 50ch; color: var(--muted); line-height: 1.6; }
+.app-install-options { display: flex; gap: 12px; flex-shrink: 0; }
+.app-install-options button { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 12px 18px; border: 1px solid var(--line-lime); border-radius: 6px; background: #0c1b12; color: var(--lime); font: 600 14px var(--body); cursor: pointer; transition: background-color 160ms ease; }
+.app-install-options button:hover { background: #203725; }
+
+/* Intrinsic grid widths must not widen the mobile page. */
+.storefront-clean .hero-left, .storefront-clean .hero-viewport { min-width: 0; }
+.storefront-clean .iphone3d-stage { touch-action: pan-y; }
+.storefront-clean .quicklook-close { width: 44px; height: 44px; }
+.storefront-clean .iphone3d-spin-btn { min-height: 44px; }
+.storefront-clean .quicklook-sheet .iphone3d-hud-top { padding-right: 52px; flex-wrap: wrap; justify-content: flex-start; }
+.storefront-clean .header-app-btn, .storefront-clean .header-buy-cta { min-height: 44px; }
+.header-app-label-short { display: none; }
+.footer-motion-toggle { display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 8px 0; border: 0; background: transparent; color: var(--muted); font: inherit; cursor: pointer; }
+.footer-motion-toggle:hover { color: var(--lime); }
+@media (min-width: 769px) and (max-width: 1100px) {
+  .storefront-clean .nav { display: none; position: absolute; top: 100%; left: 0; right: 0; padding: 16px 5vw; background: var(--surface); border-bottom: 1px solid var(--line); flex-direction: column; align-items: stretch; gap: 8px; }
+  .storefront-clean .nav.nav-open { display: flex; }
+  .storefront-clean .nav > a { padding: 12px; }
+  .storefront-clean .menu-toggle { display: grid; place-items: center; width: 44px; height: 44px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface); color: var(--paper); cursor: pointer; }
+}
+@media (max-width: 1040px) {
+  .storefront-clean .app-install-section { flex-direction: column; align-items: flex-start; }
+}
+@media (max-width: 768px) {
+  .storefront-clean .header { height: auto; min-height: 64px; gap: 8px; padding: 8px max(12px, env(safe-area-inset-right)) 8px max(12px, env(safe-area-inset-left)); }
+  .storefront-clean .brand { min-width: 0; }
+  .storefront-clean .brand-name { font-size: 12px; white-space: normal; line-height: 1.15; }
+  .storefront-clean .header-action-group { flex-shrink: 0; gap: 4px; }
+  .storefront-clean .header-app-btn .header-app-label-wide { display: none; }
+  .header-app-label-short { display: inline; }
+  .storefront-clean .header-app-btn, .storefront-clean .header-buy-cta, .storefront-clean .menu-toggle { min-width: 44px; height: 44px; min-height: 44px; padding: 8px; }
+  .storefront-clean .nav { position: absolute; top: 100%; max-height: calc(100dvh - 80px); overflow-y: auto; }
+  .storefront-clean .hero-stage-wrap { grid-template-columns: minmax(0, 1fr); }
+  .app-install-options { width: 100%; flex-wrap: wrap; }
+  .app-install-options button { flex: 1 1 120px; }
+}
+@media (max-width: 480px) {
+  .app-install-sheet { padding: 24px 20px; }
+  .app-install-heading { gap: 12px; margin-right: 8px; }
+  .app-install-heading img { width: 44px; height: 44px; flex-basis: 44px; }
+  .app-install-heading h2 { padding-right: 4px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .app-install-dialog *, .app-install-options button { transition: none; }
+}

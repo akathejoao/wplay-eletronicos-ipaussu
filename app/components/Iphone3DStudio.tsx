@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { RotateCw, Sparkles } from "lucide-react";
 import { IphoneFinish, IphoneModelSpec } from "@/lib/iphone-models";
 
@@ -22,6 +22,7 @@ export function Iphone3DStudio({
   const [autoSpin, setAutoSpin] = useState<boolean>(false);
   const [isInteracting, setIsInteracting] = useState<boolean>(false);
   const [reducedMotion, setReducedMotion] = useState(false);
+  const dragRef = useRef<{ pointerId: number; x: number; y: number } | null>(null);
 
   useEffect(() => {
     const preference = window.matchMedia("(prefers-reduced-motion: reduce)");
@@ -58,6 +59,17 @@ export function Iphone3DStudio({
 
   const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
     if (reducedMotion || (e.target as HTMLElement).closest("button, input")) return;
+    const drag = dragRef.current;
+    if (drag && drag.pointerId === e.pointerId) {
+      const deltaX = e.clientX - drag.x;
+      const deltaY = e.clientY - drag.y;
+      drag.x = e.clientX;
+      drag.y = e.clientY;
+      setRotY((current) => current + deltaX * 0.8);
+      setRotX((current) => Math.max(-30, Math.min(30, current - deltaY * 0.2)));
+      return;
+    }
+    if (e.pointerType === "touch") return;
     const rect = e.currentTarget.getBoundingClientRect();
     const normX = (e.clientX - rect.left) / rect.width; // 0 to 1
     const normY = (e.clientY - rect.top) / rect.height; // 0 to 1
@@ -71,7 +83,22 @@ export function Iphone3DStudio({
   };
 
   const handlePointerLeave = () => {
+    if (!dragRef.current) setIsInteracting(false);
+  };
+
+  const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (reducedMotion || (event.target as HTMLElement).closest("button, input") || event.button !== 0) return;
+    dragRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setAutoSpin(false);
+    setIsInteracting(true);
+  };
+
+  const finishDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (dragRef.current?.pointerId !== event.pointerId) return;
+    dragRef.current = null;
     setIsInteracting(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   };
 
   const setPresetAngle = (targetY: number, targetX = -6) => {
@@ -87,7 +114,11 @@ export function Iphone3DStudio({
   return (
     <div
       className={compact ? "iphone3d-stage compact" : "iphone3d-stage"}
+      onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
+      onPointerUp={finishDrag}
+      onPointerCancel={finishDrag}
+      onLostPointerCapture={finishDrag}
       onPointerLeave={handlePointerLeave}
       style={
         {

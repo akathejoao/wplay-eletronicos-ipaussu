@@ -1,72 +1,44 @@
-const CACHE_NAME = 'wplay-app-v1';
+const CACHE_NAME = 'wplay-app-v2';
+const OFFLINE_URL = '/offline.html';
 
 self.addEventListener('install', (event) => {
-  self.skipWaiting();
+  event.waitUntil(caches.open(CACHE_NAME)
+    .then((cache) => cache.addAll([OFFLINE_URL, '/icons/icon-192.png']))
+    .then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (event) => {
-  event.waitUntil(
-    caches.keys().then((keys) => {
-      return Promise.all(
-        keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
-      );
-    })
-  );
-  self.clients.claim();
+  event.waitUntil(caches.keys()
+    .then((keys) => Promise.all(keys
+      .filter((key) => key.startsWith('wplay-app-') && key !== CACHE_NAME)
+      .map((key) => caches.delete(key))))
+    .then(() => self.clients.claim()));
 });
 
 self.addEventListener('fetch', (event) => {
-  // Let network handle dynamic API and pages, falling back if offline
-  if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
-  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/admin')) {
-    return;
-  }
-  event.respondWith(
-    fetch(event.request).catch(() => caches.match(event.request))
-  );
-});
-
-self.addEventListener('push', (event) => {
-  let data = { title: 'WPlay Eletrônicos', body: 'Nova novidade em iPhones e eletrônicos em Ipaussu!', url: '/' };
-  try {
-    if (event.data) {
-      data = event.data.json();
-    }
-  } catch (e) {
-    if (event.data) {
-      data.body = event.data.text();
-    }
-  }
-
-  const options = {
-    body: data.body,
-    icon: '/images/wplay-logo-official.png',
-    badge: '/images/wplay-logo-official.png',
-    vibrate: [100, 50, 100],
-    data: {
-      url: data.url || '/'
-    }
-  };
-
-  event.waitUntil(
-    self.registration.showNotification(data.title || 'WPlay Eletrônicos', options)
-  );
+  // Never cache authentication, admin pages, API responses or catalog prices.
+  if (event.request.method !== 'GET' || url.origin !== self.location.origin ||
+      url.pathname.startsWith('/api/') || url.pathname.startsWith('/admin') ||
+      event.request.mode !== 'navigate') return;
+  event.respondWith(fetch(event.request).catch(async () => {
+    const cached = await caches.match(OFFLINE_URL);
+    return cached || new Response('Sem conexão. Conecte-se à internet e tente novamente.', {
+      status: 503, headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    });
+  }));
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  const targetUrl = event.notification.data?.url || '/';
-  event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
-      for (const client of windowClients) {
-        if (client.url === targetUrl && 'focus' in client) {
-          return client.focus();
-        }
-      }
-      if (clients.openWindow) {
-        return clients.openWindow(targetUrl);
-      }
-    })
-  );
+  let targetUrl = new URL('/', self.location.origin);
+  try {
+    const candidate = new URL(event.notification.data?.url || '/', self.location.origin);
+    if (candidate.origin === self.location.origin) targetUrl = candidate;
+  } catch { /* Invalid targets return to the storefront. */ }
+  event.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (windows) => {
+    const existing = windows.find((client) => client.url === targetUrl.href);
+    if (existing) return existing.focus();
+    return self.clients.openWindow(targetUrl.href);
+  }));
 });

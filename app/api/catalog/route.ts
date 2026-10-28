@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { catalogCacheTag } from "@/lib/catalog-cache";
-import { productColumns, publicSettingsColumns } from "@/lib/catalog-repository";
+import { basicProductColumns, isMissingColumnError, productColumns, publicSettingsColumns } from "@/lib/catalog-repository";
 
 export const revalidate = 300;
 
@@ -25,14 +25,21 @@ export async function GET() {
     };
 
     // Try full productColumns first, fall back gracefully if new columns don't exist yet in Supabase
-    let productsResponse = await fetch(`${baseUrl}/rest/v1/products?${new URLSearchParams({ select: productColumns, published: "eq.true", order: "created_at.desc,id.asc" })}`, options);
-    
-    if (!productsResponse.ok) {
-      const basicProductColumns = "id,name,category,description,badge,price,image,image_fit,image_position,image_scale,published,featured,variants";
-      productsResponse = await fetch(`${baseUrl}/rest/v1/products?${new URLSearchParams({ select: basicProductColumns, published: "eq.true", order: "created_at.desc,id.asc" })}`, options);
-    }
-
-    const settingsResponse = await fetch(`${baseUrl}/rest/v1/store_settings?${settingsQuery}`, options);
+    const fetchCompatible = async (endpoint: "products" | "store_settings", query: URLSearchParams, fallbackColumns: string) => {
+      let response = await fetch(`${baseUrl}/rest/v1/${endpoint}?${query}`, { ...options, signal: AbortSignal.timeout(12_000) });
+      if (!response.ok && response.status === 400) {
+        const error = await response.clone().json().catch(() => null);
+        if (isMissingColumnError(error)) {
+          query.set("select", fallbackColumns);
+          response = await fetch(`${baseUrl}/rest/v1/${endpoint}?${query}`, { ...options, signal: AbortSignal.timeout(12_000) });
+        }
+      }
+      return response;
+    };
+    const [productsResponse, settingsResponse] = await Promise.all([
+      fetchCompatible("products", new URLSearchParams({ select: productColumns, published: "eq.true", order: "created_at.desc,id.asc" }), basicProductColumns),
+      fetchCompatible("store_settings", settingsQuery, publicSettingsColumns.replace(",custom_phone_models", "")),
+    ]);
 
     if (!productsResponse.ok || !settingsResponse.ok) throw new Error("Catalog request failed");
     const [products, settings] = await Promise.all([productsResponse.json(), settingsResponse.json()]);

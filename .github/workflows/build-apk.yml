@@ -31,12 +31,13 @@ jobs:
           java-version: '17'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@v4
+        with:
+          packages: 'platform-tools build-tools;34.0.0 platforms;android-34'
 
-      - name: Accept Android SDK Licenses & Install Build Tools
+      - name: Accept Android SDK Licenses
         run: |
           yes | sdkmanager --licenses || true
-          sdkmanager "build-tools;34.0.0" "platforms;android-34" "platform-tools"
 
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
@@ -97,42 +98,58 @@ jobs:
             chmod +x ./gradlew
           fi
 
-          echo "Compiling signed APK..."
-          if ! yes '' | bubblewrap build --skipPwaValidation --manifest=./twa-manifest.json; then
-            echo "Bubblewrap build hit interactive prompt; executing Gradle & apksigner fallback..."
+          echo "Compiling APK..."
+          BUILT=false
+
+          # Try bubblewrap non-interactive build first
+          if yes '' | bubblewrap build --skipPwaValidation --manifest=./twa-manifest.json; then
+            APK_CANDIDATE=$(find . -type f -name "*signed*.apk" -o -name "*release*.apk" | head -n 1)
+            if [ -n "$APK_CANDIDATE" ] && [ -s "$APK_CANDIDATE" ]; then
+              echo "Bubblewrap build succeeded: $APK_CANDIDATE"
+              cp "$APK_CANDIDATE" ./final-release-signed.apk
+              BUILT=true
+            fi
+          fi
+
+          # Robust Gradle & apksigner fallback
+          if [ "$BUILT" != "true" ]; then
+            echo "Running Gradle assembleRelease fallback..."
             if [ -f "./gradlew" ]; then
               ./gradlew assembleRelease
               BUILD_TOOLS="${ANDROID_HOME}/build-tools/34.0.0"
-              UNSIGNED=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
-              if [ -n "$UNSIGNED" ]; then
-                echo "Signing $UNSIGNED..."
+              RAW_APK=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
+              if [ -n "$RAW_APK" ]; then
+                echo "Aligning $RAW_APK..."
+                ${BUILD_TOOLS}/zipalign -v -p 4 "$RAW_APK" ./aligned.apk || cp "$RAW_APK" ./aligned.apk
+                echo "Signing aligned APK..."
                 ${BUILD_TOOLS}/apksigner sign \
                   --ks ./android.keystore \
                   --ks-pass "pass:${BUBBLEWRAP_KEYSTORE_PASSWORD}" \
                   --key-pass "pass:${BUBBLEWRAP_KEY_PASSWORD}" \
                   --ks-key-alias wplay \
-                  --out ./app-release-signed.apk \
-                  "$UNSIGNED"
+                  --out ./final-release-signed.apk \
+                  ./aligned.apk
+                BUILT=true
               fi
             fi
           fi
 
           cd ..
-          APK_FOUND=$(find "$BUILD_DIR" -type f -name "*signed*.apk" -o -name "*release*.apk" | head -n 1)
-          if [ -z "$APK_FOUND" ]; then
-            APK_FOUND=$(find "$BUILD_DIR" -type f -name "*.apk" | head -n 1)
+          APK_FINAL="./build-twa/final-release-signed.apk"
+          if [ ! -s "$APK_FINAL" ]; then
+            APK_FINAL=$(find ./build-twa -type f -name "*signed*.apk" -o -name "*release*.apk" | head -n 1)
           fi
 
-          if [ -z "$APK_FOUND" ] || [ ! -s "$APK_FOUND" ]; then
-            echo "Error: No APK file was generated!"
+          if [ -z "$APK_FINAL" ] || [ ! -s "$APK_FINAL" ]; then
+            echo "Error: No valid APK was generated."
             exit 1
           fi
 
-          echo "Found signed APK: $APK_FOUND"
+          echo "APK generated successfully at: $APK_FINAL"
           mkdir -p public/downloads
-          cp "$APK_FOUND" public/WPlay-Eletronicos.apk
-          cp "$APK_FOUND" public/downloads/wplay-app.apk
-          echo "Successfully published APK to public/WPlay-Eletronicos.apk and public/downloads/wplay-app.apk"
+          cp "$APK_FINAL" public/WPlay-Eletronicos.apk
+          cp "$APK_FINAL" public/downloads/wplay-app.apk
+          ls -la public/WPlay-Eletronicos.apk public/downloads/wplay-app.apk
 
       - name: Upload APK Artifact
         uses: actions/upload-artifact@v4

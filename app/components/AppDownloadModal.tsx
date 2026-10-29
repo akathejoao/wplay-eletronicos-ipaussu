@@ -105,32 +105,42 @@ export function AppDownloadModal({ isOpen, onClose, initialTab, onTriggerPwaInst
 
         <section role="tabpanel" id={`${id}-android-panel`} aria-labelledby={`${id}-android-tab`} hidden={activeTab !== "android"} tabIndex={0}>
           <h3>Instalar no Android</h3>
-          <p>Adicione a WPlay direto à tela inicial do seu celular para abrir em tela cheia com acesso instantâneo e sem barra de navegação.</p>
+          <p>Baixe o aplicativo oficial da WPlay em APK ou adicione o app à tela inicial pelo navegador.</p>
           
-          {hasPwaPrompt && !installed && (
-            <button type="button" className="app-install-primary" disabled={installing} onClick={() => void installFromBrowser()}>
-              <PlusSquare size={18} /> {installing ? "Aguardando o navegador…" : "Instalar App no Celular"}
-            </button>
-          )}
-
-          <div style={{ marginTop: "20px" }}>
-            <h4>Passo a passo no Chrome ou Samsung Internet:</h4>
+          <div className="app-install-apk" style={{ marginTop: "16px" }}>
+            <a
+              href="/WPlay-Eletronicos.apk"
+              download="WPlay-Eletronicos.apk"
+              className="app-install-primary"
+            >
+              <Download size={18} /> Baixar APK para Android
+            </a>
             <ol className="app-install-steps">
-              <li>Toque no menu <strong>⋮ (três pontinhos)</strong> no topo do navegador.</li>
-              <li>Toque em <strong>&quot;Instalar aplicativo&quot;</strong> ou <strong>&quot;Adicionar à tela inicial&quot;</strong>.</li>
-              <li>Toque em <strong>Instalar</strong> para confirmar.</li>
+              <li>Toque no botão acima para baixar o <strong>WPlay-Eletronicos.apk</strong>.</li>
+              <li>Abra o arquivo na pasta de <strong>Downloads</strong> do seu celular.</li>
+              <li>Se o Android solicitar, autorize a instalação e confirme em <strong>Instalar</strong>.</li>
             </ol>
-            <p className="app-install-note" style={{ marginTop: "16px" }}>
-              Pronto! O aplicativo oficial da WPlay será criado na tela inicial do seu celular com ícone oficial e carregamento rápido.
-            </p>
           </div>
 
-          {apkStatus === "available" && (
-            <div className="app-install-apk" style={{ marginTop: "24px", paddingTop: "16px", borderTop: "1px solid var(--line)" }}>
-              <p style={{ fontSize: "12px", color: "var(--muted)", marginBottom: "8px" }}>Opção alternativa em arquivo APK:</p>
-              <a href="/api/download/apk" download="WPlay-Eletronicos.apk" className="app-install-secondary"><Download size={16} /> Baixar APK manual</a>
-            </div>
-          )}
+          <div style={{ marginTop: "24px", paddingTop: "18px", borderTop: "1px solid var(--line)" }}>
+            <h4>Opção direta pelo navegador:</h4>
+            {hasPwaPrompt && !installed && (
+              <button
+                type="button"
+                className="app-install-secondary"
+                disabled={installing}
+                onClick={() => void installFromBrowser()}
+                style={{ marginBottom: "12px" }}
+              >
+                <PlusSquare size={18} /> {installing ? "Aguardando o navegador…" : "Instalar pelo navegador"}
+              </button>
+            )}
+            <ol className="app-install-steps">
+              <li>Toque no menu <strong>⋮ (três pontinhos)</strong> no canto do navegador.</li>
+              <li>Toque em <strong>&quot;Instalar aplicativo&quot;</strong> ou <strong>&quot;Adicionar à tela inicial&quot;</strong>.</li>
+              <li>Confirme a instalação para ter o app com ícone oficial na tela inicial.</li>
+            </ol>
+          </div>
         </section>
 
         <section role="tabpanel" id={`${id}-ios-panel`} aria-labelledby={`${id}-ios-tab`} hidden={activeTab !== "ios"} tabIndex={0}>

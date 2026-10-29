@@ -1,0 +1,33 @@
+{
+  "packageId": "br.com.wplay.ipaussu",
+  "host": "wplay-eletronicos-ipaussu.vercel.app",
+  "name": "WPlay Eletrônicos & Smart",
+  "launcherName": "WPlay",
+  "display": "standalone",
+  "themeColor": "#060809",
+  "themeColorDark": "#060809",
+  "navigationColor": "#060809",
+  "navigationColorDark": "#060809",
+  "navigationDividerColor": "#000000",
+  "navigationDividerColorDark": "#000000",
+  "backgroundColor": "#060809",
+  "enableNotifications": true,
+  "startUrl": "/",
+  "iconUrl": "https://wplay-eletronicos-ipaussu.vercel.app/icons/icon-512.png",
+  "maskableIconUrl": "https://wplay-eletronicos-ipaussu.vercel.app/icons/icon-maskable-512.png",
+  "appVersionCode": 1,
+  "appVersionName": "1.0.0",
+  "minSdkVersion": 21,
+  "orientation": "portrait",
+  "webManifestUrl": "https://wplay-eletronicos-ipaussu.vercel.app/manifest.json",
+  "fallbackType": "customtabs",
+  "features": {},
+  "alphaDependencies": {
+    "enabled": false
+  },
+  "signingKey": {
+    "path": "./android.keystore",
+    "alias": "wplay"
+  },
+  "generatorApp": "bubblewrap-cli"
+}

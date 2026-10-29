@@ -6,27 +6,53 @@ import path from "node:path";
 
 export const runtime = "nodejs";
 
-const filePath = path.join(process.cwd(), "public", "downloads", "wplay-app.apk");
+const candidatePaths = [
+  path.join(process.cwd(), "public", "WPlay-Eletronicos.apk"),
+  path.join(process.cwd(), "public", "downloads", "wplay-app.apk"),
+];
+
+async function getAvailableApk(): Promise<{ path: string; size: number } | null> {
+  for (const candidate of candidatePaths) {
+    try {
+      const file = await stat(candidate);
+      if (file.isFile() && file.size > 0) {
+        return { path: candidate, size: file.size };
+      }
+    } catch {
+      // Continue checking next path
+    }
+  }
+  return null;
+}
 
 async function download(headOnly: boolean) {
   try {
-    const file = await stat(filePath);
-    if (!file.isFile() || file.size === 0) throw new Error("APK unavailable");
+    const apk = await getAvailableApk();
+    if (!apk) throw new Error("APK unavailable");
     const headers = {
       "Content-Type": "application/vnd.android.package-archive",
       "Content-Disposition": 'attachment; filename="WPlay-Eletronicos.apk"',
-      "Content-Length": String(file.size),
+      "Content-Length": String(apk.size),
       "Cache-Control": "public, max-age=3600",
       "X-Content-Type-Options": "nosniff",
     };
     if (headOnly) return new NextResponse(null, { headers });
-    const body = Readable.toWeb(createReadStream(filePath)) as ReadableStream<Uint8Array>;
+    const body = Readable.toWeb(createReadStream(apk.path)) as ReadableStream<Uint8Array>;
     return new NextResponse(body, { headers });
   } catch {
-    return new NextResponse(headOnly ? null : "O APK está temporariamente indisponível. Adicione a WPlay à tela inicial pelo navegador.", {
-      status: 503,
-      headers: { "Cache-Control": "no-store", "Content-Type": "text/plain; charset=utf-8", "Retry-After": "3600" },
-    });
+    return new NextResponse(
+      headOnly
+        ? null
+        : "O APK está sendo gerado ou temporariamente indisponível. Você também pode adicionar a WPlay à tela inicial pelo navegador.",
+      {
+        status: 503,
+        headers: {
+          "Cache-Control": "no-store",
+          "Content-Type": "text/plain; charset=utf-8",
+          "Retry-After": "3600",
+        },
+      }
+    );
   }
 }
 

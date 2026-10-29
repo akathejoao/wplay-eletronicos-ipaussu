@@ -2449,3 +2449,383 @@
   }
 
 }
+
+/* ==========================================================================
+   WEB PUSH NOTIFICATIONS: FLOATING BANNER & ADMIN DISPATCH STUDIO
+   ========================================================================== */
+
+/* Floating permission capture banner */
+.push-floating-banner {
+  position: fixed;
+  bottom: max(20px, env(safe-area-inset-bottom, 20px));
+  right: 20px;
+  max-width: 420px;
+  width: calc(100% - 40px);
+  z-index: 999;
+  border-radius: 16px;
+  background: rgba(8, 20, 14, 0.94);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(199, 244, 80, 0.35);
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7), 0 0 24px rgba(199, 244, 80, 0.12);
+  padding: 16px;
+  overflow: hidden;
+  animation: pushBannerSlideUp 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes pushBannerSlideUp {
+  from {
+    opacity: 0;
+    transform: translateY(24px) scale(0.96);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.push-banner-glow {
+  position: absolute;
+  top: -40px;
+  right: -40px;
+  width: 140px;
+  height: 140px;
+  background: radial-gradient(circle, rgba(199, 244, 80, 0.25) 0%, transparent 70%);
+  pointer-events: none;
+}
+
+.push-banner-content {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 14px;
+  align-items: flex-start;
+}
+
+.push-banner-icon-wrap {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  background: rgba(199, 244, 80, 0.14);
+  border: 1px solid rgba(199, 244, 80, 0.35);
+  display: grid;
+  place-items: center;
+  color: #c7f450;
+  flex-shrink: 0;
+}
+
+.push-icon-sparkle {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  color: #c7f450;
+}
+
+.push-banner-texts {
+  grid-column: 2;
+}
+
+.push-banner-title {
+  font-size: 14.5px;
+  font-weight: 700;
+  color: #f3f6ef;
+  margin: 0 0 4px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.push-banner-desc {
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: #a4b79b;
+  margin: 0 0 12px;
+}
+
+.push-banner-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  justify-content: flex-end;
+}
+
+.push-banner-cta {
+  background: #c7f450;
+  color: #061108;
+  font-weight: 700;
+  font-size: 13px;
+  padding: 8px 16px;
+  border-radius: 999px;
+  border: none;
+  cursor: pointer;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.push-banner-cta:hover {
+  background: #d6fa6b;
+  transform: translateY(-1px);
+}
+
+.push-banner-close {
+  background: transparent;
+  color: #8fa286;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  padding: 7px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.push-banner-close:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #f3f6ef;
+}
+
+/* Admin Push Studio: Live Lockscreen Preview */
+.push-preview-container {
+  background: rgba(7, 18, 12, 0.7);
+  border: 1px solid rgba(172, 233, 122, 0.2);
+  border-radius: 16px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+}
+
+.push-preview-topbar {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.push-preview-topbar-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: #d1e2cb;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.push-os-toggle {
+  display: inline-flex;
+  padding: 3px;
+  background: rgba(0, 0, 0, 0.4);
+  border-radius: 999px;
+  border: 1px solid rgba(172, 233, 122, 0.2);
+}
+
+.push-os-btn {
+  padding: 4px 12px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  border: none;
+  background: transparent;
+  color: #8fa286;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.push-os-btn.active {
+  background: #c7f450;
+  color: #061108;
+}
+
+.push-lockscreen-phone {
+  width: min(100%, 330px);
+  min-height: 480px;
+  background: #000000;
+  border: 8px solid #1c261e;
+  border-radius: 36px;
+  position: relative;
+  overflow: hidden;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.8), inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+  display: flex;
+  flex-direction: column;
+  color: #ffffff;
+  font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, sans-serif;
+  background: linear-gradient(180deg, #0d2217 0%, #060e0a 100%);
+  padding-bottom: 24px;
+}
+
+.push-phone-notch {
+  width: 100px;
+  height: 22px;
+  background: #000000;
+  border-radius: 0 0 14px 14px;
+  margin: 0 auto;
+  position: relative;
+  z-index: 10;
+}
+
+.push-phone-statusbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 20px 0;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: #ffffff;
+  z-index: 5;
+}
+
+.push-phone-clock-large {
+  text-align: center;
+  margin: 20px 0 16px;
+}
+
+.push-clock-time {
+  font-size: 46px;
+  font-weight: 300;
+  line-height: 1;
+  letter-spacing: -0.02em;
+  color: #ffffff;
+}
+
+.push-clock-date {
+  font-size: 12px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.75);
+  margin-top: 4px;
+}
+
+.push-notification-bubble {
+  margin: 0 12px;
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(24, 38, 30, 0.88);
+  backdrop-filter: blur(25px);
+  -webkit-backdrop-filter: blur(25px);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  animation: fadeIn 0.3s ease;
+}
+
+.push-bubble-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.push-bubble-brand {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-weight: 600;
+  color: #c7f450;
+}
+
+.push-bubble-icon {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  object-fit: cover;
+}
+
+.push-bubble-title {
+  font-size: 13.5px;
+  font-weight: 700;
+  color: #ffffff;
+  margin: 0;
+  line-height: 1.25;
+}
+
+.push-bubble-body {
+  font-size: 12px;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.88);
+  margin: 0;
+  word-break: break-word;
+}
+
+.push-bubble-banner-img {
+  width: 100%;
+  height: 100px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  margin-top: 4px;
+}
+
+.push-bubble-footer-hint {
+  font-size: 10.5px;
+  color: #c7f450;
+  font-weight: 600;
+  margin-top: 2px;
+}
+
+/* Admin Subscriber Stats Counter */
+.push-counter-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-radius: 12px;
+  background: rgba(15, 36, 24, 0.85);
+  border: 1px solid rgba(172, 233, 122, 0.28);
+  margin-bottom: 20px;
+}
+
+.push-counter-info h4 {
+  margin: 0 0 4px;
+  font-size: 15px;
+  color: #f3f6ef;
+}
+
+.push-counter-info p {
+  margin: 0;
+  font-size: 12px;
+  color: #8fa286;
+}
+
+.push-counter-num {
+  font-size: 32px;
+  font-weight: 800;
+  color: #c7f450;
+  font-family: var(--display, monospace);
+  line-height: 1;
+}
+
+/* Dispatch Result Feedback Box */
+.push-result-box {
+  padding: 14px 18px;
+  border-radius: 10px;
+  background: rgba(22, 45, 30, 0.9);
+  border: 1px solid #c7f450;
+  margin-bottom: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.push-result-box h4 {
+  margin: 0;
+  color: #c7f450;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.push-result-box ul {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 12.5px;
+  color: #d1e2cb;
+}

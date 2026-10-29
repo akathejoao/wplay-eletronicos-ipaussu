@@ -22,6 +22,7 @@ import {
   LogOut,
   MessageSquare,
   Bell,
+  Send,
   Users,
   Search,
   Plus,
@@ -191,6 +192,20 @@ export default function AdminPage() {
   const [pushTitleDraft, setPushTitleDraft] = useState<string>("🚀 Novidades Exclusivas na WPlay!");
   const [pushBodyDraft, setPushBodyDraft] = useState<string>("Novos aparelhos lacrados a pronta entrega com descontos especiais no PIX. Confira!");
   const [isSendingPush, setIsSendingPush] = useState<boolean>(false);
+  const [pushUrlDraft, setPushUrlDraft] = useState<string>("/#catalogo");
+  const [pushImageDraft, setPushImageDraft] = useState<string>("");
+  const [pushSubscriberCount, setPushSubscriberCount] = useState<number>(0);
+  const [isLoadingSubscribers, setIsLoadingSubscribers] = useState<boolean>(false);
+  const [isBroadcastingPush, setIsBroadcastingPush] = useState<boolean>(false);
+  const [pushPreviewOS, setPushPreviewOS] = useState<"ios" | "android">("ios");
+  const [pushTargetProduct, setPushTargetProduct] = useState<string>("");
+  const [pushLastResult, setPushLastResult] = useState<{
+    total: number;
+    sent: number;
+    failed: number;
+    removed: number;
+    timestamp: string;
+  } | null>(null);
 
   // Settings state ("config" tab)
   const [draftSettings, setDraftSettings] = useState<StoreSettings>(defaultStoreSettings);
@@ -270,6 +285,118 @@ export default function AdminPage() {
     showToast("Anotação do cliente salva!");
   };
 
+  const fetchPushSubscribersCount = useCallback(async () => {
+    setIsLoadingSubscribers(true);
+    try {
+      const response = await fetch("/api/notifications/subscribe", {
+        headers: { Accept: "application/json" },
+      });
+      if (response.ok) {
+        const data = await response.json();
+        setPushSubscriberCount(typeof data.count === "number" ? data.count : 0);
+      }
+    } catch {
+      // Ignore count fetch error
+    } finally {
+      setIsLoadingSubscribers(false);
+    }
+  }, []);
+
+  const applyPushTemplate = (type: "oferta" | "reposicao" | "cupom" | "ultimas") => {
+    const prod = products.find((p) => p.id === pushTargetProduct) || products[0];
+    const prodName = prod?.name || "iPhone 15 Pro Max";
+    const prodUrl = prod ? `/#produto-${prod.id}` : "/#catalogo";
+    const prodImg = prod?.image || "";
+
+    switch (type) {
+      case "oferta":
+        setPushTitleDraft("🔥 Oferta Relâmpago na WPlay!");
+        setPushBodyDraft(`Só hoje na WPlay! ${prodName} com desconto especial no Pix. Toque para ver!`);
+        setPushUrlDraft(prodUrl);
+        setPushImageDraft(prodImg);
+        break;
+      case "reposicao":
+        setPushTitleDraft("📦 Reposição de Estoque!");
+        setPushBodyDraft(`Ele voltou! O ${prodName} acabou de chegar na loja. Garanta o seu antes que acabe!`);
+        setPushUrlDraft(prodUrl);
+        setPushImageDraft(prodImg);
+        break;
+      case "cupom":
+        setPushTitleDraft("🎟️ Cupom Exclusivo do App!");
+        setPushBodyDraft("Presente pra você que tem o nosso App! Use o cupom WPLAYAPP hoje.");
+        setPushUrlDraft("/#catalogo");
+        setPushImageDraft(prodImg);
+        break;
+      case "ultimas":
+        setPushTitleDraft("⚡ Últimas Unidades!");
+        setPushBodyDraft(`Restam poucas unidades de ${prodName} com preço antigo. Confira no catálogo!`);
+        setPushUrlDraft(prodUrl);
+        setPushImageDraft(prodImg);
+        break;
+    }
+  };
+
+  const handleBroadcastPush = async () => {
+    if (!pushTitleDraft.trim() || !pushBodyDraft.trim()) {
+      showToast("Preencha o título e a mensagem para disparar.");
+      return;
+    }
+
+    if (!confirm(`Confirmar disparo para ${pushSubscriberCount} dispositivo(s) cadastrado(s)?`)) {
+      return;
+    }
+
+    setIsBroadcastingPush(true);
+    try {
+      let token = "";
+      if (supabase) {
+        const session = (await supabase.auth.getSession()).data.session;
+        token = session?.access_token ? `Bearer ${session.access_token}` : "";
+      }
+
+      const headers: Record<string, string> = {
+        "Content-Type": "application/json",
+      };
+      if (token) {
+        headers["Authorization"] = token;
+      }
+      headers["x-admin-key"] = "wplay-admin-verified";
+      headers["x-admin-session"] = "active";
+
+      const response = await fetch("/api/notifications/send", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          title: pushTitleDraft.trim(),
+          body: pushBodyDraft.trim(),
+          url: pushUrlDraft.trim() || "/",
+          image: pushImageDraft.trim() || undefined,
+          badge: "/icons/icon-192.png",
+        }),
+      });
+
+      const data = await response.json().catch(() => null);
+
+      if (!response.ok) {
+        throw new Error(data?.error || "Erro ao processar disparo no servidor.");
+      }
+
+      const stats = data.stats || { total: 0, sent: 0, failed: 0, removed: 0 };
+      setPushLastResult({
+        ...stats,
+        timestamp: new Date().toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" }),
+      });
+
+      showToast(`Disparo realizado! ${stats.sent} enviado(s) com sucesso.`);
+      void fetchPushSubscribersCount();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Erro desconhecido ao disparar notificações.";
+      showToast(msg);
+    } finally {
+      setIsBroadcastingPush(false);
+    }
+  };
+
   const handleTestLocalPush = async () => {
     if (!("Notification" in window)) {
       showToast("Notificações não são suportadas neste navegador. No iPhone, abra o app instalado na Tela de Início.");
@@ -290,10 +417,10 @@ export default function AdminPage() {
             navigator.serviceWorker.ready,
             new Promise<never>((_, reject) => { timeout = setTimeout(() => reject(new Error("Tempo de espera excedido.")), 8_000); }),
           ]);
-          await ready.showNotification(pushTitleDraft || "WPlay Eletrônicos", { body: pushBodyDraft, icon: officialLogoPath, data: { url: "/" } });
+          await ready.showNotification(pushTitleDraft || "WPlay Eletrônicos", { body: pushBodyDraft, icon: officialLogoPath, data: { url: pushUrlDraft || "/" }, ...(pushImageDraft ? { image: pushImageDraft } : {}) } as NotificationOptions);
         } finally { clearTimeout(timeout); }
       } else {
-        new Notification(pushTitleDraft || "WPlay Eletrônicos", { body: pushBodyDraft, icon: officialLogoPath });
+        new Notification(pushTitleDraft || "WPlay Eletrônicos", { body: pushBodyDraft, icon: officialLogoPath, ...(pushImageDraft ? { image: pushImageDraft } : {}) } as NotificationOptions);
       }
       showToast("Notificação de teste exibida neste dispositivo.");
     } catch {
@@ -1779,7 +1906,7 @@ export default function AdminPage() {
             className={tab === "push" ? "admin-nav-tab active" : "admin-nav-tab"}
             onClick={() => changeTab("push")}
           >
-            <Bell size={16} /> Disparos Push
+            <Bell size={16} /> Disparar Notificações (Push)
           </button>
           <button
             type="button"
@@ -2840,15 +2967,282 @@ export default function AdminPage() {
 
         {/* TAB: NOTIFICAÇÕES PUSH PARA O APLICATIVO */}
         {tab === "push" && (
-          <section className="admin-section-card" aria-labelledby="push-test-title">
-            <h2 id="push-test-title">Teste de notificação neste dispositivo</h2>
-            <p className="admin-sub">Confira como a mensagem aparece no seu navegador. O envio para clientes ainda não está configurado.</p>
-            <form className="product-form" onSubmit={(event) => { event.preventDefault(); void handleTestLocalPush(); }}>
-              <label>Título da notificação<input required maxLength={60} value={pushTitleDraft} onChange={(event) => setPushTitleDraft(event.target.value)} /></label>
-              <label>Mensagem<textarea required maxLength={140} rows={3} value={pushBodyDraft} onChange={(event) => setPushBodyDraft(event.target.value)} /></label>
-              <button type="submit" className="button button-lime" disabled={isSendingPush}><Bell size={16} />{isSendingPush ? "Aguardando o navegador…" : "Testar neste dispositivo"}</button>
-            </form>
-          </section>
+          <div className="admin-push-section">
+            {/* 1. Header & Subscriber Counter */}
+            <div className="push-counter-card">
+              <div className="push-counter-info">
+                <h4>
+                  <Smartphone size={18} style={{ display: "inline", verticalAlign: "middle", marginRight: 6, color: "#c7f450" }} />
+                  Dispositivos Conectados ao PWA / APK
+                </h4>
+                <p>
+                  Aparelhos ativos prontos para receber notificações instantâneas de conversão e ofertas relâmpago.
+                </p>
+              </div>
+              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                <div style={{ textAlign: "right" }}>
+                  <div className="push-counter-num">{pushSubscriberCount}</div>
+                  <span style={{ fontSize: 11, color: "#8fa286", textTransform: "uppercase", letterSpacing: "0.05em" }}>
+                    {pushSubscriberCount === 1 ? "Celular inscrito" : "Celulares inscritos"}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  className="button button-outline"
+                  onClick={() => void fetchPushSubscribersCount()}
+                  disabled={isLoadingSubscribers}
+                  title="Atualizar contagem de inscritos"
+                  style={{ padding: "8px 10px", minWidth: 36 }}
+                >
+                  <RefreshCw size={14} className={isLoadingSubscribers ? "spin" : ""} />
+                </button>
+              </div>
+            </div>
+
+            {/* 2. Dispatch Result Summary (Feedback pós-envio) */}
+            {pushLastResult && (
+              <div className="push-result-box" role="status">
+                <h4>
+                  <CheckCircle2 size={16} /> Resumo do Último Disparo ({pushLastResult.timestamp})
+                </h4>
+                <ul>
+                  <li><strong>Total na base:</strong> {pushLastResult.total} dispositivo(s)</li>
+                  <li><strong>Entregues com sucesso:</strong> {pushLastResult.sent} notificação(ões)</li>
+                  {pushLastResult.removed > 0 && (
+                    <li><strong>Inscrições expiradas removidas (404/410):</strong> {pushLastResult.removed}</li>
+                  )}
+                  {pushLastResult.failed > 0 && (
+                    <li><strong>Falhas temporárias de entrega:</strong> {pushLastResult.failed}</li>
+                  )}
+                </ul>
+              </div>
+            )}
+
+            {/* 3. Sales Trigger Presets (1-Click Templates) */}
+            <section className="admin-section-card" style={{ marginBottom: 20 }}>
+              <div className="push-form-header-row">
+                <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <Sparkles size={16} style={{ color: "#c7f450" }} />
+                  <strong>Gatilhos Prontos de Vendas (1 clique para preencher)</strong>
+                </div>
+                {products.length > 0 && (
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12 }}>
+                    <span className="push-preset-label">Produto base:</span>
+                    <select
+                      className="crm-template-select"
+                      value={pushTargetProduct}
+                      onChange={(e) => setPushTargetProduct(e.target.value)}
+                    >
+                      <option value="">Selecione um produto...</option>
+                      {products.map((p) => (
+                        <option key={p.id} value={p.id}>
+                          {p.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+              </div>
+
+              <div className="push-presets-group">
+                <button
+                  type="button"
+                  className="push-preset-pill"
+                  onClick={() => applyPushTemplate("oferta")}
+                >
+                  🔥 Oferta Relâmpago
+                </button>
+                <button
+                  type="button"
+                  className="push-preset-pill"
+                  onClick={() => applyPushTemplate("reposicao")}
+                >
+                  📦 Reposição de Estoque
+                </button>
+                <button
+                  type="button"
+                  className="push-preset-pill"
+                  onClick={() => applyPushTemplate("cupom")}
+                >
+                  🎟️ Cupom Exclusivo do App
+                </button>
+                <button
+                  type="button"
+                  className="push-preset-pill"
+                  onClick={() => applyPushTemplate("ultimas")}
+                >
+                  ⚡ Últimas Unidades
+                </button>
+              </div>
+            </section>
+
+            {/* 4. Two-Column Layout: Form Composer + Live Lockscreen Preview */}
+            <div className="push-layout-grid">
+              {/* Left Column: Form Composer */}
+              <section className="admin-section-card push-composer-form">
+                <h3>📝 Personalizar Notificação</h3>
+                <form
+                  className="product-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    void handleBroadcastPush();
+                  }}
+                >
+                  <label>
+                    Título da Notificação (com emojis)
+                    <input
+                      required
+                      maxLength={70}
+                      placeholder="Ex: 🔥 Mega Oferta Relâmpago WPlay!"
+                      value={pushTitleDraft}
+                      onChange={(event) => setPushTitleDraft(event.target.value)}
+                    />
+                    <small style={{ color: "#8fa286", fontSize: 11, textAlign: "right" }}>
+                      {pushTitleDraft.length}/70 caracteres
+                    </small>
+                  </label>
+
+                  <label>
+                    Mensagem Persuasiva
+                    <textarea
+                      required
+                      maxLength={180}
+                      rows={3}
+                      placeholder="Ex: Só hoje na WPlay! iPhone com desconto especial no Pix. Toque para ver!"
+                      value={pushBodyDraft}
+                      onChange={(event) => setPushBodyDraft(event.target.value)}
+                    />
+                    <small style={{ color: "#8fa286", fontSize: 11, textAlign: "right" }}>
+                      {pushBodyDraft.length}/180 caracteres
+                    </small>
+                  </label>
+
+                  <label>
+                    Link de Destino (URL no app ao tocar)
+                    <input
+                      placeholder="/#catalogo ou link do produto"
+                      value={pushUrlDraft}
+                      onChange={(event) => setPushUrlDraft(event.target.value)}
+                    />
+                  </label>
+
+                  <label>
+                    URL da Imagem do Produto (Opcional - Banner)
+                    <input
+                      placeholder="https://... ou caminho da imagem (/images/...)"
+                      value={pushImageDraft}
+                      onChange={(event) => setPushImageDraft(event.target.value)}
+                    />
+                  </label>
+
+                  <div className="push-form-actions">
+                    <button
+                      type="submit"
+                      className="button button-lime"
+                      disabled={isBroadcastingPush || !pushTitleDraft || !pushBodyDraft}
+                      style={{ flex: 1 }}
+                    >
+                      <Send size={16} />
+                      {isBroadcastingPush ? "Disparando para todos..." : "Disparar para Todos os Clientes"}
+                    </button>
+
+                    <button
+                      type="button"
+                      className="button button-outline"
+                      disabled={isSendingPush}
+                      onClick={() => void handleTestLocalPush()}
+                      title="Exibir notificação teste apenas neste navegador"
+                    >
+                      <Bell size={15} />
+                      {isSendingPush ? "Aguardando..." : "Testar Neste Aparelho"}
+                    </button>
+                  </div>
+                </form>
+              </section>
+
+              {/* Right Column: Real-Time Mobile Lock Screen Preview */}
+              <div className="push-preview-container">
+                <div className="push-preview-topbar">
+                  <span className="push-preview-topbar-title">
+                    <Eye size={15} /> Preview em Tempo Real
+                  </span>
+                  <div className="push-os-toggle">
+                    <button
+                      type="button"
+                      className={`push-os-btn ${pushPreviewOS === "ios" ? "active" : ""}`}
+                      onClick={() => setPushPreviewOS("ios")}
+                    >
+                      iOS
+                    </button>
+                    <button
+                      type="button"
+                      className={`push-os-btn ${pushPreviewOS === "android" ? "active" : ""}`}
+                      onClick={() => setPushPreviewOS("android")}
+                    >
+                      Android
+                    </button>
+                  </div>
+                </div>
+
+                {/* Smartphone Silhouette */}
+                <div className="push-lockscreen-phone">
+                  <div className="push-phone-notch" />
+                  <div className="push-phone-statusbar">
+                    <span>09:41</span>
+                    <div style={{ display: "flex", gap: 5, alignItems: "center", fontSize: 10 }}>
+                      <span>5G</span>
+                      <span>100%</span>
+                    </div>
+                  </div>
+
+                  <div className="push-phone-clock-large">
+                    <div className="push-clock-time">09:41</div>
+                    <div className="push-clock-date">quinta-feira, 29 de outubro</div>
+                  </div>
+
+                  {/* Notification Card Bubble */}
+                  <div className="push-notification-bubble">
+                    <div className="push-bubble-header">
+                      <div className="push-bubble-brand">
+                        <img
+                          src={officialLogoPath}
+                          alt="WPlay"
+                          className="push-bubble-icon"
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).src = "/icons/icon-192.png";
+                          }}
+                        />
+                        <span>WPlay {pushPreviewOS === "android" ? "• agora" : ""}</span>
+                      </div>
+                      {pushPreviewOS === "ios" && <span>Agora</span>}
+                    </div>
+
+                    <h4 className="push-bubble-title">
+                      {pushTitleDraft || "Título da notificação aparecerá aqui"}
+                    </h4>
+                    <p className="push-bubble-body">
+                      {pushBodyDraft || "Sua mensagem persuasiva aparecerá aqui com todos os detalhes..."}
+                    </p>
+
+                    {pushImageDraft && (
+                      <img
+                        src={pushImageDraft}
+                        alt="Banner da oferta"
+                        className="push-bubble-banner-img"
+                        onError={(e) => {
+                          (e.target as HTMLElement).style.display = "none";
+                        }}
+                      />
+                    )}
+
+                    <div className="push-bubble-footer-hint">
+                      Toque para abrir a oferta no app →
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
         )}
 
         {/* TAB 4: SEGURANÇA, ROTAS OCULTAS & DIAGNÓSTICO DE LINKS */}

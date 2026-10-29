@@ -77,6 +77,7 @@ import { StoreAtmosphere } from "@/app/components/StoreAtmosphere";
 import { AppDownloadModal } from "@/app/components/AppDownloadModal";
 import { type BeforeInstallPromptEvent, type InstallPlatform, isStandaloneApp } from "@/lib/app-install";
 import { saveCustomerLead } from "@/lib/catalog-crm";
+import { PushFloatingBanner, PushHeaderButton } from "@/app/components/PushPrompt";
 
 type FulfillmentMode = "Retirar na loja (Ipaussu)" | "Receber por entrega";
 type PaymentPreference = "PIX (À vista)" | "Cartão de crédito" | "Dar aparelho na troca";
@@ -1016,6 +1017,7 @@ export default function Home() {
         </nav>
 
         <div className="header-action-group">
+          <PushHeaderButton onFeedback={setNotice} />
           <button
             type="button"
             className="header-app-btn"
@@ -2403,6 +2405,8 @@ export default function Home() {
           </div>
         </div>
       )}
+
+      <PushFloatingBanner onFeedback={setNotice} />
 
       {notice && (
         <div className="notice" role="status">

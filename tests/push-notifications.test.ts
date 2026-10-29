@@ -1,0 +1,95 @@
+import test from "node:test";
+import assert from "node:assert/strict";
+import {
+  getVapidPublicKey,
+  getVapidPrivateKey,
+  getVapidSubject,
+  savePushSubscription,
+  removePushSubscription,
+  getAllPushSubscriptions,
+  getPushSubscriberCount,
+  broadcastPushNotification,
+} from "../lib/push-service";
+
+test("VAPID keys are properly configured and follow standard formats", () => {
+  const pub = getVapidPublicKey();
+  const priv = getVapidPrivateKey();
+  const sub = getVapidSubject();
+
+  assert.ok(pub && pub.length >= 40, "Public key must be at least 40 characters");
+  assert.ok(priv && priv.length >= 20, "Private key must be at least 20 characters");
+  assert.ok(sub.startsWith("mailto:") || sub.startsWith("https://"), "Subject must be mailto or url");
+});
+
+test("Push subscription saving prevents duplicates by matching endpoint", async () => {
+  const testEndpoint = "https://fcm.googleapis.com/fcm/send/test-token-12345";
+  const testKeys = {
+    p256dh: "BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QT9t0A3qcVIWjkh6YEBef04",
+    auth: "tBHItJI5svbpez7KI4CCXg",
+  };
+
+  // Clean first if present
+  await removePushSubscription(testEndpoint);
+
+  // 1. First registration (new)
+  const result1 = await savePushSubscription({
+    endpoint: testEndpoint,
+    keys: testKeys,
+    userAgent: "Mozilla/5.0 Test Browser",
+  });
+
+  assert.equal(result1.success, true);
+  assert.equal(result1.isNew, true);
+
+  // 2. Second registration with the same endpoint (update, not duplicate)
+  const result2 = await savePushSubscription({
+    endpoint: testEndpoint,
+    keys: testKeys,
+    userAgent: "Mozilla/5.0 Test Browser Updated",
+  });
+
+  assert.equal(result2.success, true);
+  assert.equal(result2.isNew, false);
+  assert.equal(result1.id, result2.id, "Subscription ID must be preserved on update");
+
+  // Verify subscriber count includes it
+  const allSubs = await getAllPushSubscriptions();
+  const found = allSubs.filter((s) => s.endpoint === testEndpoint);
+  assert.equal(found.length, 1, "There should be exactly 1 subscription for this endpoint");
+
+  // Clean up
+  await removePushSubscription(testEndpoint);
+  const afterDelete = await getAllPushSubscriptions();
+  assert.equal(
+    afterDelete.some((s) => s.endpoint === testEndpoint),
+    false,
+    "Subscription must be removed"
+  );
+});
+
+test("Push subscription rejects incomplete payload", async () => {
+  await assert.rejects(
+    // @ts-expect-error Testing invalid input
+    savePushSubscription({ endpoint: "" }),
+    /PushSubscription inválido/
+  );
+
+  await assert.rejects(
+    // @ts-expect-error Testing invalid keys
+    savePushSubscription({ endpoint: "https://valid.endpoint", keys: { p256dh: "" } }),
+    /PushSubscription inválido/
+  );
+});
+
+test("Push broadcast returns stats and handles empty subscriber pool gracefully", async () => {
+  const result = await broadcastPushNotification({
+    title: "🔥 Oferta Relâmpago WPlay!",
+    body: "Só hoje na WPlay! iPhone com desconto especial no Pix.",
+    url: "/#catalogo",
+  });
+
+  assert.equal(typeof result.total, "number");
+  assert.equal(typeof result.sent, "number");
+  assert.equal(typeof result.failed, "number");
+  assert.equal(typeof result.removed, "number");
+});

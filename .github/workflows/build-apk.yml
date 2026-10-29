@@ -30,14 +30,25 @@ jobs:
           distribution: 'temurin'
           java-version: '17'
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v4
-        with:
-          packages: 'platform-tools build-tools;34.0.0 platforms;android-34'
-
-      - name: Accept Android SDK Licenses
+      - name: Configure Android SDK Environment & Install Tools
         run: |
-          yes | sdkmanager --licenses || true
+          ANDROID_PATH="/usr/local/lib/android/sdk"
+          echo "ANDROID_HOME=$ANDROID_PATH" >> $GITHUB_ENV
+          echo "ANDROID_SDK_ROOT=$ANDROID_PATH" >> $GITHUB_ENV
+          echo "$ANDROID_PATH/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "$ANDROID_PATH/platform-tools" >> $GITHUB_PATH
+
+          SDKMANAGER="$ANDROID_PATH/cmdline-tools/latest/bin/sdkmanager"
+          if [ ! -f "$SDKMANAGER" ]; then
+            SDKMANAGER=$(find "$ANDROID_PATH/cmdline-tools" -name sdkmanager -type f | head -n 1)
+          fi
+          echo "Using sdkmanager at: $SDKMANAGER"
+
+          echo "Accepting SDK licenses..."
+          yes | "$SDKMANAGER" --licenses || true
+
+          echo "Installing required platform and build tools..."
+          "$SDKMANAGER" "platform-tools" "platforms;android-34" "build-tools;34.0.0"
 
       - name: Set up Node.js 20
         uses: actions/setup-node@v4
@@ -53,7 +64,7 @@ jobs:
           cat <<EOF > ~/.bubblewrap/config.json
           {
             "jdkPath": "${JAVA_HOME}",
-            "androidSdkPath": "${ANDROID_HOME}"
+            "androidSdkPath": "/usr/local/lib/android/sdk"
           }
           EOF
           echo "Bubblewrap environment configured:"
@@ -116,7 +127,7 @@ jobs:
             echo "Running Gradle assembleRelease fallback..."
             if [ -f "./gradlew" ]; then
               ./gradlew assembleRelease
-              BUILD_TOOLS="${ANDROID_HOME}/build-tools/34.0.0"
+              BUILD_TOOLS="/usr/local/lib/android/sdk/build-tools/34.0.0"
               RAW_APK=$(find app/build/outputs/apk/release -name "*.apk" | head -n 1)
               if [ -n "$RAW_APK" ]; then
                 echo "Aligning $RAW_APK..."

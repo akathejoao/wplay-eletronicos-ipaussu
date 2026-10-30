@@ -1,130 +1,133 @@
-const CACHE_NAME = 'wplay-app-v4';
-const OFFLINE_URL = '/offline.html';
+const CACHE_NAME = 'wplay-app-v5';
+
+const PRECACHE_ASSETS = [
+  '/',
+  '/?source=pwa',
+  '/manifest.json',
+  '/icon.png',
+  '/icon-512.png',
+  '/offline.html',
+  '/globals.css',
+  '/storefront.css',
+  '/app-install.css',
+];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME)
-      .then((cache) =>
-        cache.addAll([
-          OFFLINE_URL,
-          '/icon-192.png',
-          '/icons/icon-192.png',
-          '/icons/icon-512.png',
-          '/icons/apple-touch-icon.png',
-          '/manifest.json',
-        ])
-      )
-      .then(() => self.skipWaiting())
+    caches.open(CACHE_NAME).then((cache) => {
+      return cache.addAll(PRECACHE_ASSETS).catch((err) => {
+        console.warn('Erro ao pré-armazenar assets no Service Worker:', err);
+      });
+    })
   );
+  self.skipWaiting();
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys()
-      .then((keys) =>
-        Promise.all(
-          keys
-            .filter((key) => key.startsWith('wplay-app-') && key !== CACHE_NAME)
-            .map((key) => caches.delete(key))
-        )
-      )
-      .then(() => self.clients.claim())
+    caches.keys().then((keys) => {
+      return Promise.all(
+        keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
+      );
+    })
   );
+  self.clients.claim();
 });
 
 self.addEventListener('fetch', (event) => {
+  if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
-  // Never cache authentication, admin pages, API responses or catalog prices.
-  if (
-    event.request.method !== 'GET' ||
-    url.origin !== self.location.origin ||
-    url.pathname.startsWith('/api/') ||
-    url.pathname.startsWith('/admin') ||
-    event.request.mode !== 'navigate'
-  ) {
+
+  // Nunca intercepta rotas de backend/API nem extensões do navegador
+  if (url.pathname.startsWith('/api/') || !url.protocol.startsWith('http')) return;
+
+  // Estratégia Network-First para navegação HTML (preços e estoque sempre atualizados)
+  if (event.request.mode === 'navigate') {
+    event.respondWith(
+      fetch(event.request)
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            const responseClone = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put(event.request, responseClone);
+            });
+          }
+          return networkResponse;
+        })
+        .catch(async () => {
+          const cachedResponse = await caches.match(event.request);
+          if (cachedResponse) return cachedResponse;
+          return caches.match('/offline.html') || caches.match('/');
+        })
+    );
     return;
   }
 
+  // Estratégia Stale-While-Revalidate para assets estáticos (CSS, ícones, imagens)
   event.respondWith(
-    fetch(event.request).catch(async () => {
-      const cached = await caches.match(OFFLINE_URL);
-      return (
-        cached ||
-        new Response('Sem conexão. Conecte-se à internet e tente novamente.', {
-          status: 503,
-          headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+    caches.match(event.request).then((cachedResponse) => {
+      const fetchPromise = fetch(event.request)
+        .then((networkResponse) => {
+          if (networkResponse && networkResponse.status === 200) {
+            const responseClone = networkResponse.clone();
+            caches.open(CACHE_NAME).then((cache) => {
+              cache.put(event.request, responseClone);
+            });
+          }
+          return networkResponse;
         })
-      );
+        .catch(() => cachedResponse);
+
+      return cachedResponse || fetchPromise;
     })
   );
 });
 
-/* ==========================================================================
-   WEB PUSH NOTIFICATIONS: NATIVE ANDROID/IOS RECEIVE & INTERACTION
-   ========================================================================== */
-
 self.addEventListener('push', (event) => {
-  let data = {};
-  if (event.data) {
-    try {
+  let data = { 
+    title: 'WPlay Store', 
+    body: 'Nova atualização disponível!', 
+    url: '/?source=pwa' 
+  };
+
+  try {
+    if (event.data) {
       data = event.data.json();
-    } catch {
-      data = {
-        title: 'WPlay Eletrônicos',
-        body: event.data.text(),
-      };
+    }
+  } catch {
+    if (event.data) {
+      data = event.data.body || event.data.text();
     }
   }
 
-  const title = data.title || 'WPlay Eletrônicos';
   const options = {
-    body: data.body || 'Confira os lançamentos e ofertas exclusivas na WPlay!',
-    icon: data.icon || '/icon-192.png',
-    badge: data.badge || '/icon-192.png',
-    image: data.image || undefined,
-    vibrate: [200, 100, 200, 100, 200],
-    tag: data.tag || 'wplay-sales-alert',
-    renotify: true,
+    body: data.body,
+    icon: '/icon.png',
+    badge: '/icon.png',
     data: {
       url: data.url || '/?source=pwa',
-      timestamp: Date.now(),
     },
+    vibrate: [100, 50, 100],
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil(
+    self.registration.showNotification(data.title, options)
+  );
 });
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  let targetUrl = new URL('/?source=pwa', self.location.origin);
-  try {
-    const rawUrl = event.notification.data?.url || '/?source=pwa';
-    const candidate = new URL(rawUrl, self.location.origin);
-    if (candidate.origin === self.location.origin) {
-      targetUrl = candidate;
-    }
-  } catch {
-    /* Invalid targets return to the storefront. */
-  }
+  const targetUrl = event.notification.data?.url || '/?source=pwa';
 
   event.waitUntil(
-    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (windows) => {
-      // If a window is already open at the target URL, bring it to focus
-      for (const client of windows) {
-        if (client.url === targetUrl.href && 'focus' in client) {
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
+      for (const client of windowClients) {
+        if (client.url.includes(targetUrl) && 'focus' in client) {
           return client.focus();
         }
       }
-      // If any window is open to the app, navigate it to targetUrl and focus
-      for (const client of windows) {
-        if ('navigate' in client && 'focus' in client) {
-          await client.navigate(targetUrl.href);
-          return client.focus();
-        }
-      }
-      // Otherwise open a new window
-      if (self.clients.openWindow) {
-        return self.clients.openWindow(targetUrl.href);
+      if (clients.openWindow) {
+        return clients.openWindow(targetUrl);
       }
     })
   );

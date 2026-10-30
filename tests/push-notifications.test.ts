@@ -67,6 +67,38 @@ test("Push subscription saving prevents duplicates by matching endpoint", async 
   );
 });
 
+test("Push subscription handles Safari iOS web.push.apple.com endpoints and updates counter", async () => {
+  const appleEndpoint = "https://web.push.apple.com/QC77X-test-safari-token-ios";
+  const testKeys = {
+    p256dh: "BEl_zWd-apple-sample-p256dh-key-content-1234567890abcdef",
+    auth: "AppleAuthToken12345",
+  };
+
+  await removePushSubscription(appleEndpoint);
+  const countBefore = await getPushSubscriberCount();
+
+  const saved = await savePushSubscription({
+    endpoint: appleEndpoint,
+    keys: testKeys,
+    userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_4 like Mac OS X) AppleWebKit/605.1.15",
+  });
+
+  assert.equal(saved.success, true);
+
+  const countAfter = await getPushSubscriberCount();
+  assert.equal(countAfter, countBefore + 1, "Counter must increment by 1 when saving new iOS subscription");
+
+  const all = await getAllPushSubscriptions();
+  const found = all.find((s) => s.endpoint === appleEndpoint);
+  assert.ok(found, "Apple iOS subscription must be present in store");
+  assert.equal(found?.endpoint, appleEndpoint);
+
+  // Clean up
+  await removePushSubscription(appleEndpoint);
+  const countCleaned = await getPushSubscriberCount();
+  assert.equal(countCleaned, countBefore, "Counter must restore after cleanup");
+});
+
 test("Push subscription rejects incomplete payload", async () => {
   await assert.rejects(
     // @ts-expect-error Testing invalid input

@@ -9,12 +9,17 @@ export async function GET() {
   try {
     const publicKey = getVapidPublicKey();
     const count = await getPushSubscriberCount();
-    return NextResponse.json({
-      publicKey,
-      count,
-    }, {
-      headers: { "Cache-Control": "no-store" },
-    });
+    return NextResponse.json(
+      {
+        publicKey,
+        count,
+        subscribersCount: count,
+        total: count,
+      },
+      {
+        headers: { "Cache-Control": "no-store" },
+      }
+    );
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : "Erro ao consultar status do Web Push.";
     return NextResponse.json({ error: message }, { status: 500 });
@@ -31,16 +36,28 @@ export async function POST(request: Request) {
       );
     }
 
-    // Support both direct PushSubscription and wrapped { subscription, userAgent }
+    // Support direct PushSubscription, wrapped { subscription, userAgent }, or JSON.stringify(subscription)
     const subscription = body.subscription || body;
-    const endpoint = subscription.endpoint;
+    const endpoint = typeof subscription.endpoint === "string" ? subscription.endpoint.trim() : "";
     const keys = subscription.keys;
 
-    if (!endpoint || typeof endpoint !== "string" || !keys?.p256dh || !keys?.auth) {
+    if (!endpoint || !endpoint.startsWith("http") || !keys?.p256dh || !keys?.auth) {
       return NextResponse.json(
         {
           error:
             "Objeto PushSubscription incompleto. Os campos 'endpoint', 'keys.p256dh' e 'keys.auth' são obrigatórios.",
+        },
+        { status: 400 }
+      );
+    }
+
+    const p256dh = String(keys.p256dh).trim();
+    const auth = String(keys.auth).trim();
+
+    if (!p256dh || !auth) {
+      return NextResponse.json(
+        {
+          error: "Chaves p256dh e auth não podem ser vazias.",
         },
         { status: 400 }
       );
@@ -51,8 +68,8 @@ export async function POST(request: Request) {
     const result = await savePushSubscription({
       endpoint,
       keys: {
-        p256dh: String(keys.p256dh),
-        auth: String(keys.auth),
+        p256dh,
+        auth,
       },
       userAgent,
     });
@@ -60,10 +77,12 @@ export async function POST(request: Request) {
     const totalSubscribers = await getPushSubscriberCount();
 
     return NextResponse.json({
+      ok: true,
       success: true,
       id: result.id,
       isNew: result.isNew,
       totalSubscribers,
+      subscribersCount: totalSubscribers,
       message: result.isNew
         ? "Dispositivo inscrito com sucesso para receber notificações."
         : "Inscrição de notificações atualizada com sucesso.",

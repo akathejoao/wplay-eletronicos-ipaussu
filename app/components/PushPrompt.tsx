@@ -1,22 +1,17 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import { Bell, BellRing, Sparkles, Check, X } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Bell, BellRing, Sparkles, Check, X, RefreshCw } from 'lucide-react';
 import { isStandaloneApp } from '@/lib/app-install';
+import {
+  isPushSupported,
+  ensureServiceWorkerRegistered,
+  registerPushSubscription,
+  getExistingPushSubscription,
+} from '@/lib/push-client';
 
 interface PushPromptProps {
   onFeedback?: (message: string) => void;
-}
-
-function urlBase64ToUint8Array(base64String: string): Uint8Array {
-  const padding = '='.repeat((4 - (base64String.length % 4)) % 4);
-  const base64 = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-  const rawData = window.atob(base64);
-  const outputArray = new Uint8Array(rawData.length);
-  for (let i = 0; i < rawData.length; ++i) {
-    outputArray[i] = rawData.charCodeAt(i);
-  }
-  return outputArray;
 }
 
 export function PushHeaderButton({ onFeedback }: PushPromptProps) {
@@ -24,66 +19,43 @@ export function PushHeaderButton({ onFeedback }: PushPromptProps) {
   const [subscribed, setSubscribed] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+  const checkStatus = useCallback(async () => {
+    if (!isPushSupported()) return;
     setSupported(true);
 
     if (Notification.permission === 'granted') {
-      navigator.serviceWorker.ready.then((reg) => {
-        reg.pushManager.getSubscription().then((sub) => {
-          if (sub) setSubscribed(true);
-        });
-      });
+      const sub = await getExistingPushSubscription();
+      if (sub) {
+        setSubscribed(true);
+      }
     }
   }, []);
 
+  useEffect(() => {
+    void checkStatus();
+
+    const handleGlobalSync = () => {
+      setSubscribed(true);
+    };
+
+    window.addEventListener('wplay:push-subscribed', handleGlobalSync);
+    return () => window.removeEventListener('wplay:push-subscribed', handleGlobalSync);
+  }, [checkStatus]);
+
   if (!supported) return null;
 
-  const handleSubscribe = async () => {
-    if (subscribed) {
-      onFeedback?.('Notificações já estão ativas neste dispositivo!');
-      return;
-    }
-
+  const handleAction = async () => {
     setLoading(true);
     try {
-      const permission = await Notification.requestPermission();
-      if (permission !== 'granted') {
-        onFeedback?.('Permissão de notificações não concedida.');
-        return;
-      }
-
-      const registration = await navigator.serviceWorker.ready;
-      let subscription = await registration.pushManager.getSubscription();
-
-      if (!subscription) {
-        const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || '';
-        if (vapidPublicKey) {
-          subscription = await registration.pushManager.subscribe({
-            userVisibleOnly: true,
-            applicationServerKey: urlBase64ToUint8Array(vapidPublicKey) as unknown as BufferSource,
-          });
-        }
-      }
-
-      if (subscription) {
-        const res = await fetch('/api/notifications/subscribe', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(subscription),
-        });
-
-        if (!res.ok) {
-          throw new Error(`Erro ao registrar notificação: ${res.statusText}`);
-        }
-
+      const result = await registerPushSubscription();
+      if (result.success) {
         setSubscribed(true);
-        onFeedback?.('Alertas VIP ativados com sucesso!');
+        onFeedback?.(result.message);
+      } else {
+        onFeedback?.(result.message);
       }
-    } catch (err) {
-      console.error('Falha ao ativar notificações:', err);
-      onFeedback?.('Não foi possível ativar notificações no momento.');
+    } catch {
+      onFeedback?.('Não foi possível sincronizar o dispositivo no momento.');
     } finally {
       setLoading(false);
     }
@@ -93,24 +65,24 @@ export function PushHeaderButton({ onFeedback }: PushPromptProps) {
     <button
       type="button"
       className={`header-push-btn ${subscribed ? 'header-push-active' : ''}`}
-      onClick={handleSubscribe}
+      onClick={handleAction}
       disabled={loading}
       title={
         subscribed
-          ? 'Alertas de ofertas relâmpago ativados'
+          ? 'Alertas ativos no dispositivo (Toque para sincronizar)'
           : 'Ativar alertas de ofertas relâmpago no celular'
       }
-      aria-label="Ativar alertas de ofertas relâmpago"
+      aria-label="Ativar ou sincronizar alertas de ofertas relâmpago"
     >
-      {subscribed ? (
+      {loading ? (
+        <>
+          <RefreshCw size={14} className="push-spin spin" />
+          <span className="header-push-text">Sincronizando...</span>
+        </>
+      ) : subscribed ? (
         <>
           <Check size={14} className="push-icon-active" />
           <span className="header-push-text">Alertas ativos</span>
-        </>
-      ) : loading ? (
-        <>
-          <Bell size={14} className="push-spin" />
-          <span className="header-push-text">Ativando...</span>
         </>
       ) : (
         <>
@@ -131,8 +103,22 @@ export function PushStandaloneVIPCard({ onFeedback }: PushPromptProps) {
     if (typeof window === 'undefined') return;
     const standalone = isStandaloneApp();
     if (!standalone) return;
-    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    if (!isPushSupported()) return;
 
+    // 1. Ensure Service Worker is registered immediately
+    void ensureServiceWorkerRegistered();
+
+    // 2. Silent Auto-Resync if already granted
+    if (Notification.permission === 'granted') {
+      void registerPushSubscription().then((res) => {
+        if (res.success) {
+          setSubscribed(true);
+        }
+      });
+      return;
+    }
+
+    // 3. Prompt user if permission is still default
     if (Notification.permission === 'default') {
       const timer = setTimeout(() => setVisible(true), 1500);
       return () => clearTimeout(timer);
@@ -142,42 +128,18 @@ export function PushStandaloneVIPCard({ onFeedback }: PushPromptProps) {
   const handleSubscribe = async () => {
     setLoading(true);
     try {
-      const permission = await Notification.requestPermission();
-      if (permission !== 'granted') {
-        setVisible(false);
-        return;
-      }
-
-      const registration = await navigator.serviceWorker.ready;
-      let subscription = await registration.pushManager.getSubscription();
-
-      if (!subscription) {
-        const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || '';
-        if (vapidPublicKey) {
-          subscription = await registration.pushManager.subscribe({
-            userVisibleOnly: true,
-            applicationServerKey: urlBase64ToUint8Array(vapidPublicKey) as unknown as BufferSource,
-          });
-        }
-      }
-
-      if (subscription) {
-        const res = await fetch('/api/notifications/subscribe', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(subscription),
-        });
-
-        if (!res.ok) {
-          throw new Error(`Erro ao registrar notificação: ${res.statusText}`);
-        }
-
+      const result = await registerPushSubscription();
+      if (result.success) {
         setSubscribed(true);
-        onFeedback?.('Alertas VIP ativados com sucesso!');
+        onFeedback?.(result.message);
         setTimeout(() => setVisible(false), 2000);
+      } else {
+        onFeedback?.(result.message);
+        setVisible(false);
       }
     } catch (err) {
       console.error('Falha ao ativar notificações VIP:', err);
+      onFeedback?.('Não foi possível ativar notificações no momento.');
       setVisible(false);
     } finally {
       setLoading(false);
@@ -254,8 +216,14 @@ export function PushFloatingBanner({ onFeedback }: PushPromptProps) {
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
-    if (isStandaloneApp()) return;
-    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+    if (isStandaloneApp()) return; // Don't crowd UI inside standalone PWA
+    if (!isPushSupported()) return;
+
+    // Silent Auto-Resync if granted
+    if (Notification.permission === 'granted') {
+      void registerPushSubscription();
+      return;
+    }
 
     if (Notification.permission === 'default') {
       const dismissed = sessionStorage.getItem('push_prompt_dismissed');
@@ -268,25 +236,11 @@ export function PushFloatingBanner({ onFeedback }: PushPromptProps) {
   const handleEnable = async () => {
     setLoading(true);
     try {
-      const permission = await Notification.requestPermission();
-      if (permission === 'granted') {
-        const registration = await navigator.serviceWorker.ready;
-        const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || '';
-        if (vapidPublicKey) {
-          const subscription = await registration.pushManager.subscribe({
-            userVisibleOnly: true,
-            applicationServerKey: urlBase64ToUint8Array(vapidPublicKey) as unknown as BufferSource,
-          });
-          const res = await fetch('/api/notifications/subscribe', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(subscription),
-          });
-          if (!res.ok) {
-            throw new Error(`Erro ao assinar: ${res.statusText}`);
-          }
-          onFeedback?.('Notificações de ofertas ativadas!');
-        }
+      const result = await registerPushSubscription();
+      if (result.success) {
+        onFeedback?.(result.message);
+      } else {
+        onFeedback?.(result.message);
       }
     } catch (err) {
       console.error('Erro no PushFloatingBanner:', err);

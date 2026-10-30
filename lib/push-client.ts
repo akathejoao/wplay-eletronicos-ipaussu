@@ -24,19 +24,51 @@ export function isPushSupported(): boolean {
   );
 }
 
+export async function ensureServiceWorkerRegistered(): Promise<ServiceWorkerRegistration | null> {
+  if (typeof window === "undefined" || !("serviceWorker" in navigator)) return null;
+  try {
+    await navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch((err) => {
+      console.warn("[push-client] Falha no registro de sw.js:", err);
+    });
+    return await navigator.serviceWorker.ready;
+  } catch (err) {
+    console.error("[push-client] Erro ao aguardar serviceWorker.ready:", err);
+    return null;
+  }
+}
+
 export async function getExistingPushSubscription(): Promise<PushSubscription | null> {
   if (!isPushSupported()) return null;
   try {
-    const registration = await navigator.serviceWorker.ready;
+    const registration = await ensureServiceWorkerRegistered();
+    if (!registration) return null;
     return await registration.pushManager.getSubscription();
   } catch {
     return null;
   }
 }
 
+export async function fetchServerVapidPublicKey(): Promise<string | null> {
+  try {
+    const response = await fetch("/api/notifications/subscribe", {
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    });
+    if (response.ok) {
+      const data = await response.json();
+      if (data?.publicKey && typeof data.publicKey === "string") {
+        return data.publicKey.trim();
+      }
+    }
+  } catch {
+    // Ignore fetch error
+  }
+  return null;
+}
+
 export async function registerPushSubscription(
   providedPublicKey?: string
-): Promise<{ success: boolean; message: string; subscription?: PushSubscription }> {
+): Promise<{ success: boolean; message: string; subscription?: PushSubscription; totalSubscribers?: number }> {
   if (!isPushSupported()) {
     return {
       success: false,
@@ -51,28 +83,17 @@ export async function registerPushSubscription(
       success: false,
       message:
         permission === "denied"
-          ? "Permissão bloqueada no navegador. Habilite as notificações nas configurações do site."
+          ? "Permissão bloqueada no navegador. Habilite as notificações nas configurações do iPhone/Android."
           : "Permissão de notificações não concedida.",
     };
   }
 
-  // 2. Obtain VAPID Public Key
+  // 2. Obtain VAPID Public Key (client env or backend fallback)
   let publicKey =
-    providedPublicKey ||
-    process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+    (providedPublicKey || process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY || "").trim();
 
   if (!publicKey) {
-    try {
-      const response = await fetch("/api/notifications/subscribe", {
-        headers: { Accept: "application/json" },
-      });
-      if (response.ok) {
-        const data = await response.json();
-        publicKey = data.publicKey;
-      }
-    } catch {
-      // Fallback
-    }
+    publicKey = (await fetchServerVapidPublicKey()) || "";
   }
 
   if (!publicKey) {
@@ -82,9 +103,13 @@ export async function registerPushSubscription(
     };
   }
 
-  // 3. Register with PushManager
+  // 3. Register Service Worker and PushManager
   try {
-    const registration = await navigator.serviceWorker.ready;
+    const registration = await ensureServiceWorkerRegistered();
+    if (!registration) {
+      throw new Error("Não foi possível inicializar o Service Worker.");
+    }
+
     const applicationServerKey = urlBase64ToUint8Array(publicKey) as unknown as BufferSource;
 
     let subscription = await registration.pushManager.getSubscription();
@@ -95,7 +120,7 @@ export async function registerPushSubscription(
       });
     }
 
-    // 4. Send subscription to our backend API
+    // 4. Send subscription to our backend API using toJSON() for Safari iOS compatibility
     const subJson = subscription.toJSON();
     const saveResponse = await fetch("/api/notifications/subscribe", {
       method: "POST",
@@ -104,21 +129,37 @@ export async function registerPushSubscription(
       },
       body: JSON.stringify({
         subscription: subJson,
-        userAgent: navigator.userAgent,
+        endpoint: subJson.endpoint,
+        keys: subJson.keys,
+        userAgent: typeof navigator !== "undefined" ? navigator.userAgent : undefined,
       }),
     });
 
+    const data = await saveResponse.json().catch(() => null);
+
     if (!saveResponse.ok) {
-      const errorData = await saveResponse.json().catch(() => null);
       throw new Error(
-        errorData?.error || "Não foi possível salvar o registro de notificações."
+        data?.error || "Não foi possível salvar o registro de notificações."
+      );
+    }
+
+    // Dispatch global event so Admin and UI counters update in real time
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent("wplay:push-subscribed", {
+          detail: {
+            endpoint: subJson.endpoint,
+            totalSubscribers: data?.totalSubscribers,
+          },
+        })
       );
     }
 
     return {
       success: true,
-      message: "Notificações ativadas com sucesso! Você receberá ofertas relâmpago em primeira mão.",
+      message: "Dispositivo sincronizado com sucesso! Alertas VIP ativados.",
       subscription,
+      totalSubscribers: data?.totalSubscribers,
     };
   } catch (error: unknown) {
     const message =

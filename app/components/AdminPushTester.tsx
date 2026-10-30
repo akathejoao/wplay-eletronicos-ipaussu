@@ -1,7 +1,8 @@
 'use client';
 
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Clock, Sparkles, CheckCircle2, AlertTriangle, AlertCircle, RefreshCw } from 'lucide-react';
+import { Send, Clock, Sparkles, CheckCircle2, AlertTriangle, AlertCircle, RefreshCw, Smartphone } from 'lucide-react';
+import { registerPushSubscription, isPushSupported } from '@/lib/push-client';
 
 interface PushDispatchResult {
   ok?: boolean;
@@ -26,6 +27,7 @@ const DEMO_PAYLOAD = {
 
 export function AdminPushTester({ onDispatched, className }: AdminPushTesterProps) {
   const [loading, setLoading] = useState(false);
+  const [syncingSelf, setSyncingSelf] = useState(false);
   const [countdown, setCountdown] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<{
     type: 'success' | 'warning' | 'error';
@@ -36,12 +38,20 @@ export function AdminPushTester({ onDispatched, className }: AdminPushTesterProp
   const countdownTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
+    const handleGlobalSync = (event: Event) => {
+      const customEvent = event as CustomEvent<{ totalSubscribers?: number }>;
+      onDispatched?.({ total: customEvent.detail?.totalSubscribers });
+    };
+
+    window.addEventListener('wplay:push-subscribed', handleGlobalSync);
+
     return () => {
+      window.removeEventListener('wplay:push-subscribed', handleGlobalSync);
       if (countdownTimerRef.current) {
         clearInterval(countdownTimerRef.current);
       }
     };
-  }, []);
+  }, [onDispatched]);
 
   const getAdminAuthHeaders = (): Record<string, string> => {
     const headers: Record<string, string> = {
@@ -60,7 +70,7 @@ export function AdminPushTester({ onDispatched, className }: AdminPushTesterProp
           }
         }
       } catch {
-        // Fallback gracefully
+        // Fallback gracioso
       }
     }
 
@@ -101,7 +111,7 @@ export function AdminPushTester({ onDispatched, className }: AdminPushTesterProp
         setFeedback({
           type: 'warning',
           message:
-            'Aviso: Disparo concluído, mas nenhum aparelho recebeu (0 inscritos). Abra o app no iPhone ou Android e clique em "Ativar Alertas VIP" para testar ao vivo.',
+            'Aviso: Disparo concluído, mas nenhum aparelho recebeu (0 inscritos). Clique no botão "Inscrever este Aparelho" abaixo para conectar seu celular à base de testes agora mesmo.',
           stats: { sent: 0, total: totalCount, failed: failedCount, cleaned: cleanedCount },
         });
       }
@@ -146,6 +156,37 @@ export function AdminPushTester({ onDispatched, className }: AdminPushTesterProp
         void executeSend();
       }
     }, 1000);
+  };
+
+  const handleRegisterCurrentDevice = async () => {
+    if (syncingSelf) return;
+    setSyncingSelf(true);
+    setFeedback(null);
+
+    try {
+      if (!isPushSupported()) {
+        throw new Error('Notificações não são suportadas neste navegador. No iPhone, certifique-se de que o app foi aberto pela Tela de Início.');
+      }
+
+      const result = await registerPushSubscription();
+      if (result.success) {
+        setFeedback({
+          type: 'success',
+          message: `Dispositivo conectado! ${result.totalSubscribers ? `Base atualizada para ${result.totalSubscribers} aparelho(s).` : 'Inscrição salva com sucesso.'}`,
+        });
+        onDispatched?.({ total: result.totalSubscribers });
+      } else {
+        throw new Error(result.message);
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Erro ao registrar dispositivo.';
+      setFeedback({
+        type: 'error',
+        message,
+      });
+    } finally {
+      setSyncingSelf(false);
+    }
   };
 
   return (
@@ -281,6 +322,39 @@ export function AdminPushTester({ onDispatched, className }: AdminPushTesterProp
               ? `Bloqueie o iPhone em ${countdown}s...`
               : 'Disparar em 5s (Teste de Bloqueio)'}
           </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={handleRegisterCurrentDevice}
+          disabled={syncingSelf}
+          className="button button-outline"
+          title="Inscrever este navegador/celular imediatamente para receber os testes"
+          style={{
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '0.5rem',
+            padding: '0.625rem 1.125rem',
+            fontSize: '0.875rem',
+            fontWeight: 600,
+            borderRadius: '0.75rem',
+            cursor: syncingSelf ? 'not-allowed' : 'pointer',
+            border: '1px solid rgba(255, 255, 255, 0.15)',
+            color: '#e5e7eb',
+            backgroundColor: 'rgba(255, 255, 255, 0.05)',
+          }}
+        >
+          {syncingSelf ? (
+            <>
+              <RefreshCw size={15} className="spin" />
+              <span>Inscrevendo...</span>
+            </>
+          ) : (
+            <>
+              <Smartphone size={15} />
+              <span>Inscrever este Aparelho</span>
+            </>
+          )}
         </button>
       </div>
 

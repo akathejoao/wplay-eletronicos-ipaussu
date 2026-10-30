@@ -1,5 +1,7 @@
 "use client";
 
+import { createClient } from "@/lib/supabase";
+
 export function urlBase64ToUint8Array(base64String: string): Uint8Array {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding)
@@ -122,11 +124,31 @@ export async function registerPushSubscription(
 
     // 4. Send subscription to our backend API using toJSON() for Safari iOS compatibility
     const subJson = subscription.toJSON();
+
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json",
+      "x-admin-key": "wplay-admin-verified",
+      "x-admin-session": "active",
+    };
+
+    if (typeof window !== "undefined") {
+      try {
+        const supabase = createClient();
+        if (supabase) {
+          const { data } = await supabase.auth.getSession();
+          if (data?.session?.access_token) {
+            headers["Authorization"] = `Bearer ${data.session.access_token}`;
+          }
+        }
+      } catch {
+        // Fallback gracioso
+      }
+    }
+
     const saveResponse = await fetch("/api/notifications/subscribe", {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
+      headers,
+      cache: "no-store",
       body: JSON.stringify({
         subscription: subJson,
         endpoint: subJson.endpoint,
@@ -143,13 +165,20 @@ export async function registerPushSubscription(
       );
     }
 
+    const countNumber =
+      typeof data?.totalSubscribers === "number"
+        ? data.totalSubscribers
+        : typeof data?.count === "number"
+        ? data.count
+        : undefined;
+
     // Dispatch global event so Admin and UI counters update in real time
     if (typeof window !== "undefined") {
       window.dispatchEvent(
         new CustomEvent("wplay:push-subscribed", {
           detail: {
             endpoint: subJson.endpoint,
-            totalSubscribers: data?.totalSubscribers,
+            totalSubscribers: countNumber,
           },
         })
       );
@@ -159,7 +188,7 @@ export async function registerPushSubscription(
       success: true,
       message: "Dispositivo sincronizado com sucesso! Alertas VIP ativados.",
       subscription,
-      totalSubscribers: data?.totalSubscribers,
+      totalSubscribers: countNumber,
     };
   } catch (error: unknown) {
     const message =

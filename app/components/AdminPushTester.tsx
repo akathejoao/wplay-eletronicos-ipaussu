@@ -3,6 +3,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Send, Clock, Sparkles, CheckCircle2, AlertTriangle, AlertCircle, RefreshCw, Smartphone } from 'lucide-react';
 import { registerPushSubscription, isPushSupported } from '@/lib/push-client';
+import { createClient } from '@/lib/supabase';
+import { adminSessionStorageKey } from '@/lib/catalog';
 
 interface PushDispatchResult {
   ok?: boolean;
@@ -53,7 +55,7 @@ export function AdminPushTester({ onDispatched, className }: AdminPushTesterProp
     };
   }, [onDispatched]);
 
-  const getAdminAuthHeaders = (): Record<string, string> => {
+  const getAdminAuthHeaders = async (): Promise<Record<string, string>> => {
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'x-admin-key': 'wplay-admin-verified',
@@ -62,11 +64,23 @@ export function AdminPushTester({ onDispatched, className }: AdminPushTesterProp
 
     if (typeof window !== 'undefined') {
       try {
-        const stored = sessionStorage.getItem('wplay-admin-session-v2');
+        const supabase = createClient();
+        if (supabase) {
+          const { data } = await supabase.auth.getSession();
+          if (data?.session?.access_token) {
+            headers['Authorization'] = `Bearer ${data.session.access_token}`;
+          }
+        }
+      } catch {
+        // Fallback gracioso
+      }
+
+      try {
+        const stored = sessionStorage.getItem(adminSessionStorageKey) || sessionStorage.getItem('wplay-admin-session-v2');
         if (stored) {
           const parsed = JSON.parse(stored);
-          if (parsed?.token) {
-            headers['Authorization'] = parsed.token;
+          if (parsed?.token && !headers['Authorization']) {
+            headers['Authorization'] = parsed.token.startsWith('Bearer ') ? parsed.token : `Bearer ${parsed.token}`;
           }
         }
       } catch {
@@ -82,9 +96,11 @@ export function AdminPushTester({ onDispatched, className }: AdminPushTesterProp
     setFeedback(null);
 
     try {
+      const authHeaders = await getAdminAuthHeaders();
       const response = await fetch('/api/notifications/send', {
         method: 'POST',
-        headers: getAdminAuthHeaders(),
+        headers: authHeaders,
+        credentials: 'include',
         body: JSON.stringify(DEMO_PAYLOAD),
       });
 
@@ -170,11 +186,38 @@ export function AdminPushTester({ onDispatched, className }: AdminPushTesterProp
 
       const result = await registerPushSubscription();
       if (result.success) {
+        // Sincronização imediata com cache: 'no-store'
+        let freshTotal = result.totalSubscribers;
+        try {
+          const authHeaders = await getAdminAuthHeaders();
+          const syncRes = await fetch('/api/notifications/subscribe', {
+            cache: 'no-store',
+            headers: authHeaders,
+          });
+          if (syncRes.ok) {
+            const syncData = await syncRes.json();
+            if (typeof syncData.count === 'number') {
+              freshTotal = syncData.count;
+            } else if (typeof syncData.total === 'number') {
+              freshTotal = syncData.total;
+            }
+          }
+        } catch {
+          // ignore
+        }
+
         setFeedback({
           type: 'success',
-          message: `Dispositivo conectado! ${result.totalSubscribers ? `Base atualizada para ${result.totalSubscribers} aparelho(s).` : 'Inscrição salva com sucesso.'}`,
+          message: `Dispositivo conectado! ${freshTotal !== undefined ? `Base atualizada para ${freshTotal} aparelho(s).` : 'Inscrição salva com sucesso.'}`,
         });
-        onDispatched?.({ total: result.totalSubscribers });
+        onDispatched?.({ total: freshTotal });
+        if (typeof window !== 'undefined') {
+          window.dispatchEvent(
+            new CustomEvent('wplay:push-subscribed', {
+              detail: { totalSubscribers: freshTotal },
+            })
+          );
+        }
       } else {
         throw new Error(result.message);
       }
@@ -251,125 +294,25 @@ export function AdminPushTester({ onDispatched, className }: AdminPushTesterProp
           border: '1px solid rgba(255, 255, 255, 0.05)',
         }}
       >
-        <div style={{ fontSize: '0.75rem', color: '#9ca3af', marginBottom: '0.25rem' }}>
-          <strong>Payload de Demonstração:</strong>
-        </div>
-        <div style={{ fontSize: '0.8125rem', color: '#e5e7eb', fontWeight: 600 }}>
+        <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: '#34d399', marginBottom: '0.25rem' }}>
           {DEMO_PAYLOAD.title}
         </div>
-        <div style={{ fontSize: '0.75rem', color: '#d1d5db', marginTop: '0.125rem' }}>
+        <div style={{ fontSize: '0.75rem', color: '#d1d5db', lineHeight: 1.4 }}>
           {DEMO_PAYLOAD.body}
         </div>
-      </div>
-
-      <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
-        <button
-          type="button"
-          onClick={handleImmediateSend}
-          disabled={loading || countdown !== null}
-          className="button button-lime"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            padding: '0.625rem 1.125rem',
-            fontSize: '0.875rem',
-            fontWeight: 700,
-            borderRadius: '0.75rem',
-            cursor: loading || countdown !== null ? 'not-allowed' : 'pointer',
-            opacity: loading || countdown !== null ? 0.6 : 1,
-            backgroundColor: '#10b981',
-            color: '#000',
-            border: 'none',
-          }}
-        >
-          {loading && countdown === null ? (
-            <>
-              <RefreshCw size={15} className="spin" />
-              <span>Disparando...</span>
-            </>
-          ) : (
-            <>
-              <Send size={15} />
-              <span>Disparar Agora</span>
-            </>
-          )}
-        </button>
-
-        <button
-          type="button"
-          onClick={handleCountdownSend}
-          disabled={loading || countdown !== null}
-          className="button button-outline"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            padding: '0.625rem 1.125rem',
-            fontSize: '0.875rem',
-            fontWeight: 700,
-            borderRadius: '0.75rem',
-            cursor: loading || countdown !== null ? 'not-allowed' : 'pointer',
-            border: '1px solid rgba(52, 211, 153, 0.4)',
-            color: '#34d399',
-            backgroundColor: countdown !== null ? 'rgba(52, 211, 153, 0.15)' : 'transparent',
-            transition: 'all 0.2s ease',
-          }}
-        >
-          <Clock size={15} />
-          <span>
-            {countdown !== null
-              ? `Bloqueie o iPhone em ${countdown}s...`
-              : 'Disparar em 5s (Teste de Bloqueio)'}
-          </span>
-        </button>
-
-        <button
-          type="button"
-          onClick={handleRegisterCurrentDevice}
-          disabled={syncingSelf}
-          className="button button-outline"
-          title="Inscrever este navegador/celular imediatamente para receber os testes"
-          style={{
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            padding: '0.625rem 1.125rem',
-            fontSize: '0.875rem',
-            fontWeight: 600,
-            borderRadius: '0.75rem',
-            cursor: syncingSelf ? 'not-allowed' : 'pointer',
-            border: '1px solid rgba(255, 255, 255, 0.15)',
-            color: '#e5e7eb',
-            backgroundColor: 'rgba(255, 255, 255, 0.05)',
-          }}
-        >
-          {syncingSelf ? (
-            <>
-              <RefreshCw size={15} className="spin" />
-              <span>Inscrevendo...</span>
-            </>
-          ) : (
-            <>
-              <Smartphone size={15} />
-              <span>Inscrever este Aparelho</span>
-            </>
-          )}
-        </button>
       </div>
 
       {feedback && (
         <div
           role="status"
           style={{
-            marginTop: '1rem',
-            padding: '0.75rem 1rem',
             borderRadius: '0.75rem',
+            padding: '0.75rem 1rem',
+            marginBottom: '1rem',
+            fontSize: '0.8125rem',
             display: 'flex',
             alignItems: 'flex-start',
             gap: '0.625rem',
-            fontSize: '0.8125rem',
-            lineHeight: 1.4,
             background:
               feedback.type === 'success'
                 ? 'rgba(16, 185, 129, 0.12)'
@@ -378,39 +321,133 @@ export function AdminPushTester({ onDispatched, className }: AdminPushTesterProp
                 : 'rgba(239, 68, 68, 0.12)',
             border: `1px solid ${
               feedback.type === 'success'
-                ? 'rgba(16, 185, 129, 0.3)'
+                ? 'rgba(52, 211, 153, 0.3)'
                 : feedback.type === 'warning'
                 ? 'rgba(245, 158, 11, 0.3)'
                 : 'rgba(239, 68, 68, 0.3)'
             }`,
             color:
               feedback.type === 'success'
-                ? '#34d399'
+                ? '#6ee7b7'
                 : feedback.type === 'warning'
-                ? '#fbbf24'
-                : '#f87171',
+                ? '#fcd34d'
+                : '#fca5a5',
           }}
         >
-          {feedback.type === 'success' ? (
-            <CheckCircle2 size={16} style={{ flexShrink: 0, marginTop: 2 }} />
-          ) : feedback.type === 'warning' ? (
-            <AlertTriangle size={16} style={{ flexShrink: 0, marginTop: 2 }} />
-          ) : (
-            <AlertCircle size={16} style={{ flexShrink: 0, marginTop: 2 }} />
-          )}
+          <div style={{ marginTop: '0.125rem' }}>
+            {feedback.type === 'success' && <CheckCircle2 size={16} />}
+            {feedback.type === 'warning' && <AlertTriangle size={16} />}
+            {feedback.type === 'error' && <AlertCircle size={16} />}
+          </div>
           <div style={{ flex: 1 }}>
             <div>{feedback.message}</div>
             {feedback.stats && (
-              <div style={{ marginTop: '0.25rem', fontSize: '0.75rem', opacity: 0.85 }}>
-                Entregues: <strong>{feedback.stats.sent}</strong> | Base total: <strong>{feedback.stats.total}</strong>
-                {feedback.stats.cleaned > 0 && ` | Inscrições expiradas limpas: ${feedback.stats.cleaned}`}
+              <div
+                style={{
+                  marginTop: '0.375rem',
+                  fontSize: '0.6875rem',
+                  opacity: 0.85,
+                  display: 'flex',
+                  gap: '0.875rem',
+                }}
+              >
+                <span>Total: {feedback.stats.total}</span>
+                <span>Entregues: {feedback.stats.sent}</span>
+                {feedback.stats.failed > 0 && <span>Falhas: {feedback.stats.failed}</span>}
+                {feedback.stats.cleaned > 0 && <span>Removidos (expirados): {feedback.stats.cleaned}</span>}
               </div>
             )}
           </div>
         </div>
       )}
+
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.625rem', alignItems: 'center' }}>
+        <button
+          type="button"
+          onClick={handleImmediateSend}
+          disabled={loading || countdown !== null}
+          style={{
+            flex: '1 1 180px',
+            background: 'linear-gradient(135deg, #10b981 0%, #059669 100%)',
+            color: '#fff',
+            fontWeight: 700,
+            fontSize: '0.8125rem',
+            padding: '0.625rem 1rem',
+            borderRadius: '0.625rem',
+            border: 'none',
+            cursor: loading ? 'not-allowed' : 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '0.5rem',
+            boxShadow: '0 4px 12px rgba(16, 185, 129, 0.25)',
+            opacity: loading || countdown !== null ? 0.6 : 1,
+          }}
+        >
+          {loading ? (
+            <>
+              <RefreshCw size={14} className="spin" />
+              <span>Disparando aos aparelhos...</span>
+            </>
+          ) : (
+            <>
+              <Send size={14} />
+              <span>Disparar Agora (Instantâneo)</span>
+            </>
+          )}
+        </button>
+
+        <button
+          type="button"
+          onClick={handleCountdownSend}
+          disabled={loading || countdown !== null}
+          style={{
+            flex: '1 1 180px',
+            background: 'rgba(255, 255, 255, 0.05)',
+            color: '#e5e7eb',
+            fontWeight: 600,
+            fontSize: '0.8125rem',
+            padding: '0.625rem 1rem',
+            borderRadius: '0.625rem',
+            border: '1px solid rgba(255, 255, 255, 0.1)',
+            cursor: loading || countdown !== null ? 'not-allowed' : 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '0.5rem',
+            opacity: loading || countdown !== null ? 0.6 : 1,
+          }}
+        >
+          <Clock size={14} />
+          <span>
+            {countdown !== null ? `Bloqueie a tela! Disparo em ${countdown}s...` : 'Disparar em 5s (Bloqueie a tela)'}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={handleRegisterCurrentDevice}
+          disabled={syncingSelf}
+          style={{
+            background: 'transparent',
+            color: '#34d399',
+            fontWeight: 600,
+            fontSize: '0.75rem',
+            padding: '0.5rem 0.75rem',
+            borderRadius: '0.5rem',
+            border: '1px dashed rgba(52, 211, 153, 0.35)',
+            cursor: syncingSelf ? 'not-allowed' : 'pointer',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.375rem',
+            marginLeft: 'auto',
+          }}
+          title="Garante que este computador ou smartphone esteja inscrito na lista de envio"
+        >
+          {syncingSelf ? <RefreshCw size={13} className="spin" /> : <Smartphone size={13} />}
+          <span>{syncingSelf ? 'Conectando...' : 'Inscrever este Aparelho'}</span>
+        </button>
+      </div>
     </div>
   );
 }
-
-export default AdminPushTester;

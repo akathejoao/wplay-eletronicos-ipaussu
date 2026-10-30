@@ -78,24 +78,30 @@ export interface PushBroadcastResult {
   removed: number;
 }
 
-function getSupabaseConfig() {
+function getSupabaseConfig(authToken?: string) {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const key =
+  const serviceKey =
     process.env.SUPABASE_SERVICE_ROLE_KEY ||
+    process.env.SUPABASE_SECRET_KEY;
+  const defaultKey =
     process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY ||
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const key = serviceKey || defaultKey;
   if (!url || !key) return null;
-  return { url: url.replace(/\/$/, ""), key };
+  const cleanAuthToken = authToken ? authToken.replace(/^Bearer\s+/i, "").trim() : "";
+  const token = serviceKey || (cleanAuthToken || key);
+  return { url: url.replace(/\/$/, ""), key, token };
 }
 
 /**
  * Sends a push notification to all subscribed devices and removes expired ones.
  */
 export async function broadcastPushNotification(
-  payload: PushNotificationPayload
+  payload: PushNotificationPayload,
+  authToken?: string
 ): Promise<PushBroadcastResult> {
   ensureVapidConfigured();
-  const subscriptions = await getAllPushSubscriptions();
+  const subscriptions = await getAllPushSubscriptions(authToken);
 
   const result: PushBroadcastResult = {
     total: subscriptions.length,
@@ -137,7 +143,7 @@ export async function broadcastPushNotification(
       // HTTP 404 (Not Found) or 410 (Gone) indicate unsubscribed or expired subscription
       if (statusCode === 404 || statusCode === 410) {
         result.removed++;
-        await removePushSubscription(sub.endpoint);
+        await removePushSubscription(sub.endpoint, authToken);
       } else {
         result.failed++;
         console.warn(`[push-service] Falha ao enviar para ${sub.endpoint.slice(0, 30)}...:`, error);
@@ -147,15 +153,15 @@ export async function broadcastPushNotification(
 
   await Promise.allSettled(sendPromises);
 
-  // Record campaign in database / storage
-  const config = getSupabaseConfig();
+  // Record campaign in database / storage if table exists
+  const config = getSupabaseConfig(authToken);
   if (config) {
     try {
       await fetch(`${config.url}/rest/v1/push_campaigns`, {
         method: "POST",
         headers: {
           apikey: config.key,
-          Authorization: `Bearer ${config.key}`,
+          Authorization: `Bearer ${config.token}`,
           "Content-Type": "application/json",
         },
         body: JSON.stringify({

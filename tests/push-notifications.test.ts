@@ -10,6 +10,10 @@ import {
   getPushSubscriberCount,
   broadcastPushNotification,
 } from "../lib/push-service";
+import {
+  PUSH_SETTINGS_GALLERY_ID,
+  PUSH_SETTINGS_GALLERY_LABEL,
+} from "../lib/push-store";
 
 test("VAPID keys are properly configured and follow standard formats", () => {
   const pub = getVapidPublicKey();
@@ -124,4 +128,9 @@ test("Push broadcast returns stats and handles empty subscriber pool gracefully"
   assert.equal(typeof result.sent, "number");
   assert.equal(typeof result.failed, "number");
   assert.equal(typeof result.removed, "number");
+});
+
+test("Push store defines store_settings gallery fallback metadata for Vercel Serverless persistence", () => {
+  assert.equal(PUSH_SETTINGS_GALLERY_ID, "wplay_push_subscriptions_store");
+  assert.equal(PUSH_SETTINGS_GALLERY_LABEL, "WPlay Push Subscriptions Storage");
 });

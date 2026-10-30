@@ -5,10 +5,11 @@ import {
   savePushSubscription,
 } from "@/lib/push-service";
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
+    const authHeader = request.headers.get("authorization") || undefined;
     const publicKey = getVapidPublicKey();
-    const count = await getPushSubscriberCount();
+    const count = await getPushSubscriberCount(authHeader);
     return NextResponse.json(
       {
         publicKey,
@@ -17,7 +18,7 @@ export async function GET() {
         total: count,
       },
       {
-        headers: { "Cache-Control": "no-store" },
+        headers: { "Cache-Control": "no-store, no-cache, must-revalidate" },
       }
     );
   } catch (error: unknown) {
@@ -64,29 +65,40 @@ export async function POST(request: Request) {
     }
 
     const userAgent = request.headers.get("user-agent") || body.userAgent;
+    const authHeader = request.headers.get("authorization") || undefined;
 
-    const result = await savePushSubscription({
-      endpoint,
-      keys: {
-        p256dh,
-        auth,
+    const result = await savePushSubscription(
+      {
+        endpoint,
+        keys: {
+          p256dh,
+          auth,
+        },
+        userAgent,
       },
-      userAgent,
-    });
+      authHeader
+    );
 
-    const totalSubscribers = await getPushSubscriberCount();
+    const totalSubscribers = await getPushSubscriberCount(authHeader);
 
-    return NextResponse.json({
-      ok: true,
-      success: true,
-      id: result.id,
-      isNew: result.isNew,
-      totalSubscribers,
-      subscribersCount: totalSubscribers,
-      message: result.isNew
-        ? "Dispositivo inscrito com sucesso para receber notificações."
-        : "Inscrição de notificações atualizada com sucesso.",
-    });
+    return NextResponse.json(
+      {
+        ok: true,
+        success: true,
+        id: result.id,
+        isNew: result.isNew,
+        totalSubscribers,
+        subscribersCount: totalSubscribers,
+        total: totalSubscribers,
+        count: totalSubscribers,
+        message: result.isNew
+          ? "Dispositivo inscrito com sucesso para receber notificações."
+          : "Inscrição de notificações atualizada com sucesso.",
+      },
+      {
+        headers: { "Cache-Control": "no-store, no-cache, must-revalidate" },
+      }
+    );
   } catch (error: unknown) {
     console.error("[api/notifications/subscribe] Erro:", error);
     const message =

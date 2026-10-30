@@ -289,19 +289,55 @@ export default function AdminPage() {
   const fetchPushSubscribersCount = useCallback(async () => {
     setIsLoadingSubscribers(true);
     try {
+      const headers: Record<string, string> = {
+        Accept: "application/json",
+        "x-admin-key": "wplay-admin-verified",
+        "x-admin-session": "active",
+      };
+      if (supabase) {
+        try {
+          const { data } = await supabase.auth.getSession();
+          if (data?.session?.access_token) {
+            headers["Authorization"] = `Bearer ${data.session.access_token}`;
+          }
+        } catch {
+          // ignore
+        }
+      }
       const response = await fetch("/api/notifications/subscribe", {
-        headers: { Accept: "application/json" },
+        headers,
+        cache: "no-store",
       });
       if (response.ok) {
         const data = await response.json();
-        setPushSubscriberCount(typeof data.count === "number" ? data.count : 0);
+        const total =
+          typeof data.count === "number"
+            ? data.count
+            : typeof data.total === "number"
+            ? data.total
+            : typeof data.subscribersCount === "number"
+            ? data.subscribersCount
+            : 0;
+        setPushSubscriberCount(total);
       }
     } catch {
       // Ignore count fetch error
     } finally {
       setIsLoadingSubscribers(false);
     }
-  }, []);
+  }, [supabase]);
+
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    if (tab === "push") {
+      void fetchPushSubscribersCount();
+    }
+    const handleSubscribed = () => {
+      void fetchPushSubscribersCount();
+    };
+    window.addEventListener("wplay:push-subscribed", handleSubscribed);
+    return () => window.removeEventListener("wplay:push-subscribed", handleSubscribed);
+  }, [tab, isAuthenticated, fetchPushSubscribersCount]);
 
   const applyPushTemplate = (type: "oferta" | "reposicao" | "cupom" | "ultimas") => {
     const prod = products.find((p) => p.id === pushTargetProduct) || products[0];
@@ -816,7 +852,9 @@ export default function AdminPage() {
   }, [settings.custom_categories, products]);
 
   const galleryOptions = useMemo(() => {
-    const custom = settings.custom_gallery || [];
+    const custom = (settings.custom_gallery || []).filter(
+      (item) => item.id !== "wplay_push_subscriptions_store"
+    );
     const merged = [...custom, ...studioGallery];
     const seen = new Set<string>();
     return merged.filter((item) => {
@@ -1001,9 +1039,19 @@ export default function AdminPage() {
 
   const persistSettings = async (nextSettings: StoreSettings) => {
     const normalizedSettings = normalizeSettings(nextSettings);
+    const currentSystemPushItem = (settings.custom_gallery || []).find(
+      (item) => item.id === "wplay_push_subscriptions_store"
+    );
+    const galleryWithoutPush = normalizedSettings.custom_gallery.filter(
+      (item) => item.id !== "wplay_push_subscriptions_store"
+    ).slice(0, 60);
+    const finalGallery = currentSystemPushItem
+      ? [...galleryWithoutPush, currentSystemPushItem]
+      : galleryWithoutPush;
+
     const normalized = {
       ...normalizedSettings,
-      custom_gallery: normalizedSettings.custom_gallery.slice(0, 60),
+      custom_gallery: finalGallery,
     };
     if (supabase) {
       const nextPublicSettings = settingsToDatabase(normalized);

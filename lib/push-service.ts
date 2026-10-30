@@ -18,7 +18,11 @@ export function getVapidPrivateKey(): string {
 }
 
 export function getVapidSubject(): string {
-  return process.env.VAPID_SUBJECT || DEFAULT_VAPID_SUBJECT;
+  const envSubject = (process.env.VAPID_SUBJECT || "").trim();
+  if (envSubject.startsWith("mailto:") || envSubject.startsWith("https://")) {
+    return envSubject;
+  }
+  return DEFAULT_VAPID_SUBJECT;
 }
 
 let vapidConfigured = false;

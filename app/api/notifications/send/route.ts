@@ -116,7 +116,12 @@ export async function POST(request: Request) {
     });
 
     return NextResponse.json({
+      ok: true,
       success: true,
+      sentCount: result.sent,
+      failedCount: result.failed,
+      cleanedCount: result.removed,
+      total: result.total,
       message: `Disparo concluído: ${result.sent} entregue(s) com sucesso de um total de ${result.total} inscritos.`,
       stats: result,
     });

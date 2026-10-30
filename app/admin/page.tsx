@@ -38,6 +38,7 @@ import {
   Upload,
 } from "lucide-react";
 import { AdminPhoneModelsTab } from "@/app/components/AdminPhoneModelsTab";
+import { AdminPushTester } from "@/app/components/AdminPushTester";
 import {
   AdminAuditEntry,
   adminAuditStorageKey,
@@ -2998,6 +2999,9 @@ export default function AdminPage() {
                 </button>
               </div>
             </div>
+
+            {/* Live Web Push Tester Component for Client Presentations */}
+            <AdminPushTester onDispatched={() => void fetchPushSubscribersCount()} />
 
             {/* 2. Dispatch Result Summary (Feedback pós-envio) */}
             {pushLastResult && (

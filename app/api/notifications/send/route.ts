@@ -29,18 +29,22 @@ async function verifyAdminAccess(request: Request): Promise<boolean> {
     }
   }
 
-  // 2. Fallback for local demo host or admin panel session token
+  // 2. Check local environment or admin secret token
+  const host = request.headers.get("host") || "";
   const origin = request.headers.get("origin") || request.headers.get("referer") || "";
   const isLocal =
     origin.includes("localhost") ||
     origin.includes("127.0.0.1") ||
-    origin.includes("::1");
+    origin.includes("::1") ||
+    host.includes("localhost") ||
+    host.includes("127.0.0.1") ||
+    host.includes("::1");
 
   if (isLocal && (adminSecret === "wplay-admin-verified" || request.headers.get("x-admin-session") === "active")) {
     return true;
   }
 
-  // 3. Fallback when Supabase is not configured in local environment
+  // 3. Fallback when Supabase is not configured or in standalone admin mode
   if (!url || !key) {
     if (adminSecret || authorization) {
       return true;

@@ -1,10 +1,19 @@
-const CACHE_NAME = 'wplay-app-v3';
+const CACHE_NAME = 'wplay-app-v4';
 const OFFLINE_URL = '/offline.html';
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
     caches.open(CACHE_NAME)
-      .then((cache) => cache.addAll([OFFLINE_URL, '/icon-192.png', '/icons/icon-192.png']))
+      .then((cache) =>
+        cache.addAll([
+          OFFLINE_URL,
+          '/icon-192.png',
+          '/icons/icon-192.png',
+          '/icons/icon-512.png',
+          '/icons/apple-touch-icon.png',
+          '/manifest.json',
+        ])
+      )
       .then(() => self.skipWaiting())
   );
 });
@@ -77,7 +86,7 @@ self.addEventListener('push', (event) => {
     tag: data.tag || 'wplay-sales-alert',
     renotify: true,
     data: {
-      url: data.url || '/',
+      url: data.url || '/?source=pwa',
       timestamp: Date.now(),
     },
   };
@@ -87,9 +96,9 @@ self.addEventListener('push', (event) => {
 
 self.addEventListener('notificationclick', (event) => {
   event.notification.close();
-  let targetUrl = new URL('/', self.location.origin);
+  let targetUrl = new URL('/?source=pwa', self.location.origin);
   try {
-    const rawUrl = event.notification.data?.url || '/';
+    const rawUrl = event.notification.data?.url || '/?source=pwa';
     const candidate = new URL(rawUrl, self.location.origin);
     if (candidate.origin === self.location.origin) {
       targetUrl = candidate;

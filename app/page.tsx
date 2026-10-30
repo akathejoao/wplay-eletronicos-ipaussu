@@ -75,9 +75,9 @@ import {
 import { catalogCacheSeconds, catalogChangedEvent, publicCatalogStorageKey } from "@/lib/catalog-cache";
 import { StoreAtmosphere } from "@/app/components/StoreAtmosphere";
 import { AppDownloadModal } from "@/app/components/AppDownloadModal";
-import { type BeforeInstallPromptEvent, type InstallPlatform, isStandaloneApp } from "@/lib/app-install";
+import { type BeforeInstallPromptEvent, type InstallPlatform, isStandaloneApp, useAppInstall } from "@/lib/app-install";
 import { saveCustomerLead } from "@/lib/catalog-crm";
-import { PushFloatingBanner, PushHeaderButton } from "@/app/components/PushPrompt";
+import { PushFloatingBanner, PushHeaderButton, PushStandaloneVIPCard } from "@/app/components/PushPrompt";
 
 type FulfillmentMode = "Retirar na loja (Ipaussu)" | "Receber por entrega";
 type PaymentPreference = "PIX (À vista)" | "Cartão de crédito" | "Dar aparelho na troca";
@@ -208,6 +208,13 @@ export default function Home() {
   const [selectedIphoneFinishId, setSelectedIphoneFinishId] = useState<string>("desert-titanium");
   const [selectedIphoneCondition, setSelectedIphoneCondition] = useState<"Lacrado" | "Seminovo">("Lacrado");
 
+  // Intelligent PWA / Native App Installation Hook
+  const {
+    isStandalone,
+    hasNativePrompt,
+    triggerNativePrompt,
+    openInstallModal: triggerOpenInstallModal,
+  } = useAppInstall();
   const [isAppDownloadModalOpen, setIsAppDownloadModalOpen] = useState(false);
   const [appModalInitialTab, setAppModalInitialTab] = useState<InstallPlatform | undefined>(undefined);
 
@@ -311,13 +318,29 @@ export default function Home() {
   }, [menuOpen]);
 
   const handleInstallAppClick = async () => {
+    if (hasNativePrompt) {
+      try {
+        const outcome = await triggerNativePrompt();
+        if (outcome === "accepted") {
+          setIsAppDownloadModalOpen(false);
+          setPwaInstalled(true);
+          setNotice("App WPlay instalado com sucesso! Abra pelo ícone na tela inicial.");
+          return;
+        }
+      } catch {
+        // Fallback below
+      }
+    }
     const prompt = deferredPrompt;
     if (!prompt) return;
     setDeferredPrompt(null);
     try {
       await prompt.prompt();
       const { outcome } = await prompt.userChoice;
-      if (outcome === "accepted") setIsAppDownloadModalOpen(false);
+      if (outcome === "accepted") {
+        setIsAppDownloadModalOpen(false);
+        setPwaInstalled(true);
+      }
     } catch {
       setNotice("A instalação não foi concluída. Use o menu do navegador para adicionar a WPlay à tela inicial.");
     }
@@ -1018,6 +1041,7 @@ export default function Home() {
 
         <div className="header-action-group">
           <PushHeaderButton onFeedback={setNotice} />
+          {!isStandalone && !pwaInstalled && (
           <button
             type="button"
             className="header-app-btn"
@@ -1029,6 +1053,7 @@ export default function Home() {
             <span className="header-btn-text header-app-label-wide">{pwaInstalled ? "App instalado" : "Baixar app"}</span>
             <span className="header-app-label-short">App</span>
           </button>
+          )}
 
           <button
             type="button"
@@ -2000,6 +2025,7 @@ export default function Home() {
         </div>
       </section>
 
+      {!isStandalone && !pwaInstalled && (
       <section className="app-install-section" id="aplicativo" aria-labelledby="app-section-title">
         <div><h2 id="app-section-title">A WPlay na sua tela inicial.</h2><p>Escolha seu celular e veja como acessar o catálogo pelo app.</p></div>
         <div className="app-install-options">
@@ -2007,6 +2033,7 @@ export default function Home() {
           <button type="button" onClick={() => openAppDownload("ios")}><Plus size={18} /> Instalar no iPhone</button>
         </div>
       </section>
+      )}
 
       {/* Footer with Official WPlay Logo */}
       <footer className="footer">
@@ -2099,8 +2126,8 @@ export default function Home() {
         onClose={() => setIsAppDownloadModalOpen(false)}
         initialTab={appModalInitialTab}
         onTriggerPwaInstall={handleInstallAppClick}
-        hasPwaPrompt={Boolean(deferredPrompt)}
-        installed={pwaInstalled}
+        hasPwaPrompt={hasNativePrompt || Boolean(deferredPrompt)}
+        installed={isStandalone || pwaInstalled}
       />
 
       {/* Interactive Product Quick-Look Sheet (with 360° 3D Turntable for all products) */}
@@ -2406,6 +2433,7 @@ export default function Home() {
         </div>
       )}
 
+      <PushStandaloneVIPCard onFeedback={setNotice} />
       <PushFloatingBanner onFeedback={setNotice} />
 
       {notice && (

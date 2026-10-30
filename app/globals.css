@@ -61,7 +61,11 @@ html {
   scroll-behavior: smooth;
   scroll-padding-top: calc(84px + env(safe-area-inset-top, 0px));
   overflow-x: clip;
+  overscroll-behavior-y: none;
   -webkit-overflow-scrolling: touch;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 body {
@@ -71,8 +75,19 @@ body {
   font-family: var(--body);
   -webkit-font-smoothing: antialiased;
   overflow-x: clip;
+  overscroll-behavior-y: none;
   -webkit-overflow-scrolling: touch;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
   padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+
+input,
+textarea,
+[contenteditable="true"] {
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 main {
@@ -4146,4 +4161,12 @@ a {
   .quicklook-media-3d {
     min-height: 400px;
   }
+}
+
+
+/* 3D Canvas Isolated Interaction */
+.product-studio__canvas canvas,
+.iphone3d-viewport canvas,
+.iphone3d-stage canvas {
+  touch-action: none !important;
 }

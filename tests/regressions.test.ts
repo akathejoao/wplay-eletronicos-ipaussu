@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { requireStoreAdmin } from "../lib/admin-access";
-import { detectInstallPlatform } from "../lib/app-install";
+import { detectInstallPlatform, isInAppBrowser, getInAppBrowserName } from "../lib/app-install";
 import { normalizeProduct, normalizeSettings } from "../lib/catalog";
 import { iphoneLineup } from "../lib/iphone-models";
 import { deleteCustomerLead, getStoredLeads, loadLeads, saveCustomerLead, updateLeadStatus } from "../lib/catalog-crm";
@@ -95,4 +95,27 @@ test("a successful CRM update requires an affected row", async () => {
 test("cloud capture does not silently replace a failed insert with local storage", async () => {
   await assert.rejects(saveCustomerLead({ name: "Cliente", whatsapp: "5514999999999", productName: "Produto", status: "novo" },
     mockClient({ data: null, error: { code: "42501" } }).client), /registrar o contato/);
+});
+
+test("in-app browser detector correctly identifies Instagram, Facebook and TikTok", () => {
+  const instagramUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 Instagram 300.0.0.0.0";
+  const facebookUA = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36 [FBAN/EMA;FBAV/380.0.0.0.0;]";
+  const tiktokUA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Mobile/15E148 BytedanceWebview/1.0.0 (musical_ly 30.0.0)";
+  const regularSafari = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1";
+  const regularChrome = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36";
+
+  assert.equal(isInAppBrowser(instagramUA), true);
+  assert.equal(getInAppBrowserName(instagramUA), "Instagram");
+
+  assert.equal(isInAppBrowser(facebookUA), true);
+  assert.equal(getInAppBrowserName(facebookUA), "Facebook");
+
+  assert.equal(isInAppBrowser(tiktokUA), true);
+  assert.equal(getInAppBrowserName(tiktokUA), "TikTok");
+
+  assert.equal(isInAppBrowser(regularSafari), false);
+  assert.equal(getInAppBrowserName(regularSafari), null);
+
+  assert.equal(isInAppBrowser(regularChrome), false);
+  assert.equal(getInAppBrowserName(regularChrome), null);
 });
